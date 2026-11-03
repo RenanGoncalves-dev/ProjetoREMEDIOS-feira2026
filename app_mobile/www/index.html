@@ -216,40 +216,110 @@
   }
 
   /* ---------- Conexão Bluetooth BLE (APK Nativo + Web) ---------- */
+  async function conectarNoDeviceId(deviceId, nome) {
+    aviso('🔗 Conectando em ' + (nome || 'ELOS_Caixa') + '...');
+    try { await BleClient.disconnect(deviceId); } catch (e) {}
+
+    await BleClient.connect(deviceId, () => aoDesconectar());
+    connectedDeviceId = deviceId;
+
+    await BleClient.startNotifications(
+      connectedDeviceId,
+      SERVICE_UUID,
+      CHAR_TX_UUID,
+      (dataView) => aoReceberDadosBLE(dataView)
+    );
+
+    $('conn').classList.add('on');
+    $('btBtn').textContent = '🟢 Conectado';
+    $('btBtn').classList.add('connected');
+    aviso('✅ Conectado à ELOS_Caixa!');
+
+    await enviarComandoBLE('STATUS');
+  }
+
   async function alternarBluetooth() {
     if (connectedDeviceId) {
       try { await BleClient.disconnect(connectedDeviceId); } catch (e) {}
       aoDesconectar();
       return;
     }
-    try {
-      await BleClient.initialize({ androidNeverForLocation: true });
-      aviso('🔍 Procurando ELOS_Caixa...');
 
+    try {
+      await BleClient.initialize();
+
+      // Garante que o Bluetooth está ligado
+      try {
+        const ligado = await BleClient.isEnabled();
+        if (!ligado) await BleClient.requestEnable();
+      } catch (e) {}
+
+      await BleClient.setDisplayStrings({
+        scanning: 'Procurando ELOS_Caixa...',
+        cancel: 'Cancelar',
+        availableDevices: 'Toque em ELOS_Caixa para conectar:',
+        noDeviceFound: 'Nenhum dispositivo encontrado (Ative o GPS/Localização)'
+      });
+
+      // PASSO 1: Se o celular já pareou ou já está conectado na ELOS_Caixa nas Configs do Android,
+      // conecta direto sem precisar escanear!
+      try {
+        const jaConectados = await BleClient.getConnectedDevices([SERVICE_UUID]);
+        const elosCon = (jaConectados || []).find(d => d.name && d.name.toUpperCase().includes('ELOS'));
+        if (elosCon) {
+          await conectarNoDeviceId(elosCon.deviceId, elosCon.name);
+          return;
+        }
+      } catch (e) { console.log('getConnectedDevices:', e); }
+
+      try {
+        const pareados = await BleClient.getBondedDevices();
+        const elosPar = (pareados || []).find(d => d.name && d.name.toUpperCase().includes('ELOS'));
+        if (elosPar) {
+          try {
+            await conectarNoDeviceId(elosPar.deviceId, elosPar.name);
+            return;
+          } catch (errPar) {
+            console.log('Tentativa via pareado falhou, iniciando busca ativa...', errPar);
+          }
+        }
+      } catch (e) { console.log('getBondedDevices:', e); }
+
+      // PASSO 2: Busca rápida automática por 3.5 segundos (conecta sozinho se achar ELOS_Caixa)
+      aviso('🔍 Buscando ELOS_Caixa automaticamente...');
+      let achouAuto = null;
+      try {
+        await BleClient.requestLEScan({ allowDuplicates: false }, (res) => {
+          const nome = (res.localName || (res.device && res.device.name) || '').toUpperCase();
+          const uuids = (res.uuids || []).map(u => u.toLowerCase());
+          if (nome.includes('ELOS') || uuids.includes(SERVICE_UUID.toLowerCase())) {
+            achouAuto = res.device;
+          }
+        });
+
+        for (let t = 0; t < 35; t++) {
+          if (achouAuto) break;
+          await new Promise(r => setTimeout(r, 100));
+        }
+        await BleClient.stopLEScan();
+      } catch (e) {
+        try { await BleClient.stopLEScan(); } catch (_) {}
+      }
+
+      if (achouAuto) {
+        await conectarNoDeviceId(achouAuto.deviceId, achouAuto.name || 'ELOS_Caixa');
+        return;
+      }
+
+      // PASSO 3: Abre a lista completa sem filtro restritivo de nome (mostra todos os dispositivos BLE)
       const device = await BleClient.requestDevice({
-        namePrefix: 'ELOS',
         optionalServices: [SERVICE_UUID]
       });
 
-      await BleClient.connect(device.deviceId, () => aoDesconectar());
-      connectedDeviceId = device.deviceId;
-
-      await BleClient.startNotifications(
-        connectedDeviceId,
-        SERVICE_UUID,
-        CHAR_TX_UUID,
-        (dataView) => aoReceberDadosBLE(dataView)
-      );
-
-      $('conn').classList.add('on');
-      $('btBtn').textContent = '🟢 Conectado';
-      $('btBtn').classList.add('connected');
-      aviso('✅ Conectado à ELOS_Caixa!');
-
-      await enviarComandoBLE('STATUS');
+      await conectarNoDeviceId(device.deviceId, device.name || 'ELOS_Caixa');
     } catch (e) {
       console.error(e);
-      aviso('⚠️ Conexão Bluetooth cancelada ou falhou.');
+      aviso('⚠️ Não foi possível conectar. Verifique se a Caixa está ligada e o GPS ativo.');
     }
   }
 
@@ -426,3 +496,4 @@
 </script>
 </body>
 </html>
+

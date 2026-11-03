@@ -12,6 +12,8 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
+<script src="capacitor.js"></script>
+<script src="ble-plugin.js"></script>
 <style>
   :root {
     color-scheme: light;
@@ -175,15 +177,14 @@
 
 <script>
   const $ = id => document.getElementById(id);
+  const { BleClient } = capacitorCommunityBluetoothLe;
 
   // UUIDs Nordic UART Service (mesmos configurados no ESP32)
   const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   const CHAR_RX_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
   const CHAR_TX_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 
-  let bleDevice = null;
-  let rxChar = null;
-  let txChar = null;
+  let connectedDeviceId = null;
   let bufferRecepcao = '';
 
   let dados = { ocupados: 0, total: 7, agendamentos: [] };
@@ -214,54 +215,125 @@
     return [h, m, x].map(n => String(n).padStart(2, '0')).join(':');
   }
 
-  /* ---------- Conexão Bluetooth BLE ---------- */
+  /* ---------- Conexão Bluetooth BLE (APK Nativo + Web) ---------- */
+  async function conectarNoDeviceId(deviceId, nome) {
+    aviso('🔗 Conectando em ' + (nome || 'ELOS_Caixa') + '...');
+    try { await BleClient.disconnect(deviceId); } catch (e) {}
+
+    await BleClient.connect(deviceId, () => aoDesconectar());
+    connectedDeviceId = deviceId;
+
+    await BleClient.startNotifications(
+      connectedDeviceId,
+      SERVICE_UUID,
+      CHAR_TX_UUID,
+      (dataView) => aoReceberDadosBLE(dataView)
+    );
+
+    $('conn').classList.add('on');
+    $('btBtn').textContent = '🟢 Conectado';
+    $('btBtn').classList.add('connected');
+    aviso('✅ Conectado à ELOS_Caixa!');
+
+    await enviarComandoBLE('STATUS');
+  }
+
   async function alternarBluetooth() {
-    if (bleDevice && bleDevice.gatt.connected) {
-      bleDevice.gatt.disconnect();
+    if (connectedDeviceId) {
+      try { await BleClient.disconnect(connectedDeviceId); } catch (e) {}
+      aoDesconectar();
       return;
     }
-    if (!navigator.bluetooth) {
-      return aviso('⚠️ Use o Chrome no Android ou o APK com suporte BLE.');
-    }
+
     try {
-      aviso('🔍 Procurando ELOS_Caixa...');
-      bleDevice = await navigator.bluetooth.requestDevice({
-        filters: [{ name: 'ELOS_Caixa' }, { services: [SERVICE_UUID] }],
+      await BleClient.initialize();
+
+      // Garante que o Bluetooth está ligado
+      try {
+        const ligado = await BleClient.isEnabled();
+        if (!ligado) await BleClient.requestEnable();
+      } catch (e) {}
+
+      await BleClient.setDisplayStrings({
+        scanning: 'Procurando ELOS_Caixa...',
+        cancel: 'Cancelar',
+        availableDevices: 'Toque em ELOS_Caixa para conectar:',
+        noDeviceFound: 'Nenhum dispositivo encontrado (Ative o GPS/Localização)'
+      });
+
+      // PASSO 1: Se o celular já pareou ou já está conectado na ELOS_Caixa nas Configs do Android,
+      // conecta direto sem precisar escanear!
+      try {
+        const jaConectados = await BleClient.getConnectedDevices([SERVICE_UUID]);
+        const elosCon = (jaConectados || []).find(d => d.name && d.name.toUpperCase().includes('ELOS'));
+        if (elosCon) {
+          await conectarNoDeviceId(elosCon.deviceId, elosCon.name);
+          return;
+        }
+      } catch (e) { console.log('getConnectedDevices:', e); }
+
+      try {
+        const pareados = await BleClient.getBondedDevices();
+        const elosPar = (pareados || []).find(d => d.name && d.name.toUpperCase().includes('ELOS'));
+        if (elosPar) {
+          try {
+            await conectarNoDeviceId(elosPar.deviceId, elosPar.name);
+            return;
+          } catch (errPar) {
+            console.log('Tentativa via pareado falhou, iniciando busca ativa...', errPar);
+          }
+        }
+      } catch (e) { console.log('getBondedDevices:', e); }
+
+      // PASSO 2: Busca rápida automática por 3.5 segundos (conecta sozinho se achar ELOS_Caixa)
+      aviso('🔍 Buscando ELOS_Caixa automaticamente...');
+      let achouAuto = null;
+      try {
+        await BleClient.requestLEScan({ allowDuplicates: false }, (res) => {
+          const nome = (res.localName || (res.device && res.device.name) || '').toUpperCase();
+          const uuids = (res.uuids || []).map(u => u.toLowerCase());
+          if (nome.includes('ELOS') || uuids.includes(SERVICE_UUID.toLowerCase())) {
+            achouAuto = res.device;
+          }
+        });
+
+        for (let t = 0; t < 35; t++) {
+          if (achouAuto) break;
+          await new Promise(r => setTimeout(r, 100));
+        }
+        await BleClient.stopLEScan();
+      } catch (e) {
+        try { await BleClient.stopLEScan(); } catch (_) {}
+      }
+
+      if (achouAuto) {
+        await conectarNoDeviceId(achouAuto.deviceId, achouAuto.name || 'ELOS_Caixa');
+        return;
+      }
+
+      // PASSO 3: Abre a lista completa sem filtro restritivo de nome (mostra todos os dispositivos BLE)
+      const device = await BleClient.requestDevice({
         optionalServices: [SERVICE_UUID]
       });
-      bleDevice.addEventListener('gattserverdisconnected', aoDesconectar);
 
-      const server = await bleDevice.gatt.connect();
-      const service = await server.getPrimaryService(SERVICE_UUID);
-      rxChar = await service.getCharacteristic(CHAR_RX_UUID);
-      txChar = await service.getCharacteristic(CHAR_TX_UUID);
-
-      await txChar.startNotifications();
-      txChar.addEventListener('characteristicvaluechanged', aoReceberDadosBLE);
-
-      $('conn').classList.add('on');
-      $('btBtn').textContent = '🟢 Conectado';
-      $('btBtn').classList.add('connected');
-      aviso('✅ Conectado à ELOS_Caixa!');
-
-      await enviarComandoBLE('STATUS');
+      await conectarNoDeviceId(device.deviceId, device.name || 'ELOS_Caixa');
     } catch (e) {
       console.error(e);
-      aviso('⚠️ Conexão Bluetooth cancelada ou falhou.');
+      aviso('⚠️ Não foi possível conectar. Verifique se a Caixa está ligada e o GPS ativo.');
     }
   }
 
   function aoDesconectar() {
+    connectedDeviceId = null;
     $('conn').classList.remove('on');
     $('btBtn').textContent = '🔵 Conectar Caixa';
     $('btBtn').classList.remove('connected');
-    rxChar = null;
-    txChar = null;
     aviso('🔴 Caixa desconectada.');
   }
 
-  function aoReceberDadosBLE(event) {
-    const chunk = new TextDecoder().decode(event.target.value);
+  function aoReceberDadosBLE(dataView) {
+    const bytes = new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
+    const chunk = new TextDecoder().decode(bytes);
     bufferRecepcao += chunk;
     let idx;
     while ((idx = bufferRecepcao.indexOf('\n')) !== -1) {
@@ -296,16 +368,16 @@
   }
 
   async function enviarComandoBLE(cmd) {
-    if (!rxChar || !bleDevice || !bleDevice.gatt.connected) {
+    if (!connectedDeviceId) {
       aviso('⚠️ Conecte na caixa via Bluetooth primeiro!');
       return false;
     }
     try {
       const bytes = new TextEncoder().encode(cmd + '\n');
-      // Envia em blocos de 20 bytes para máxima compatibilidade BLE
       for (let i = 0; i < bytes.length; i += 20) {
         const pedaco = bytes.slice(i, i + 20);
-        await rxChar.writeValue(pedaco);
+        const dv = new DataView(pedaco.buffer, pedaco.byteOffset, pedaco.byteLength);
+        await BleClient.write(connectedDeviceId, SERVICE_UUID, CHAR_RX_UUID, dv);
       }
       return true;
     } catch (e) {
@@ -360,7 +432,7 @@
     $('proxTempo').textContent = menor ? fmt(menor.resta) : '--:--:--';
     $('proxDesc').textContent = menor ? menor.desc : 'Nenhum agendamento ativo';
 
-    if (menor && menor.resta <= 0 && Date.now() - ultimaLeitura > 2500 && rxChar) {
+    if (menor && menor.resta <= 0 && Date.now() - ultimaLeitura > 2500 && connectedDeviceId) {
       enviarComandoBLE('STATUS');
     }
   }
@@ -375,10 +447,12 @@
   function atualizarEstoque() {
     const t = $('inp_total').value, o = $('inp_ocupados').value;
     if (o === '' || t === '') return aviso('⚠️ Preencha os dois valores!');
-    if (enviarComandoBLE(`ESTOQUE:${t}:${o}`)) {
-      $('inp_ocupados').value = '';
-      aviso('✅ Estoque atualizado!');
-    }
+    enviarComandoBLE(`ESTOQUE:${t}:${o}`).then(ok => {
+      if (ok) {
+        $('inp_ocupados').value = '';
+        aviso('✅ Estoque atualizado!');
+      }
+    });
   }
 
   function limparAgendamentos() {

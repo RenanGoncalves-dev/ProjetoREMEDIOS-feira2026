@@ -499,9 +499,18 @@ void iniciarBluetooth() {
   pService->start();
 
   BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
+  // Pacote principal (< 31 bytes): garante que o nome "ELOS_Caixa" sempre apareça na busca do celular
+  BLEAdvertisementData advData;
+  advData.setFlags(0x06); // General Discoverable + BR/EDR Not Supported
+  advData.setName(NOME_BLUETOOTH);
+  pAdvertising->setAdvertisementData(advData);
+
+  // Scan Response (< 31 bytes): envia o UUID de 128 bits separadamente sem cortar o nome
+  BLEAdvertisementData scanRespData;
+  scanRespData.setCompleteServices(BLEUUID(SERVICE_UUID));
+  pAdvertising->setScanResponseData(scanRespData);
+
   pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);
   BLEDevice::startAdvertising();
 
   Serial.println("[BLE] Bluetooth Low Energy iniciado como: " NOME_BLUETOOTH);
