@@ -168,16 +168,59 @@ pio run -e caixa --target upload
 pio device monitor
 ```
 
-### 2. Instalar ou Recompilar o Aplicativo Android (`.apk`)
-* **Para instalar diretamente:** Envie o arquivo [`app_mobile/ELOS_Caixa.apk`](./app_mobile/ELOS_Caixa.apk) para o smartphone Android e execute a instalação.
-* **Para modificar o aplicativo e gerar um novo `.apk`:**
-  1. Edite os módulos em `app_mobile/www/` (`index.html`, `css/styles.css`, `js/ui.js`, `js/bluetooth.js`, `js/app.js`).
-  2. Sincronize com o projeto Android:
-     ```bash
-     cd app_mobile
-     npx cap sync android
-     ```
-  3. Faça o `git push origin main` — o **GitHub Actions** compilará automaticamente o novo `app_mobile/ELOS_Caixa.apk` na nuvem, bastando rodar `git pull` para recebê-lo pronto.
+### 2. Como Compilar Novas Versões do Aplicativo (`.apk`) pelo Terminal
+
+Sempre que você editar os arquivos do aplicativo dentro de `app_mobile/www/` (`index.html`, `css/styles.css`, `js/ui.js`, `js/bluetooth.js` ou `js/app.js`), escolha uma das opções abaixo no **Terminal do VS Code (PowerShell)** para gerar o novo arquivo **[`app_mobile/ELOS_Caixa.apk`](./app_mobile/ELOS_Caixa.apk)**:
+
+#### ⚡ Opção A: Comando Único Automatizado (Recomendado)
+Na raiz do projeto, execute o script [compilar_apk.ps1](./compilar_apk.ps1):
+
+```powershell
+.\compilar_apk.ps1
+```
+*(Esse script sincroniza o Capacitor, envia as alterações, aguarda a compilação do `.apk` e já baixa o novo `app_mobile/ELOS_Caixa.apk` pronto para a sua pasta!)*
+
+---
+
+#### ☁️ Opção B: Passo a Passo Manual pelo Terminal (Via GitHub Actions — Sem instalar Android Studio)
+Se preferir rodar os comandos um por um no terminal do VS Code:
+
+```powershell
+# 1. Sincroniza os arquivos HTML/CSS/JS com o projeto nativo Android
+cd app_mobile
+npx cap sync android
+cd ..
+
+# 2. Envia para o GitHub (dispara o compilador automático de APK na nuvem)
+git pull --rebase origin main
+git add .
+git commit -m "Atualiza versao do aplicativo ELOS"
+git push origin main
+
+# 3. Aguarde ~75 segundos pela compilação na nuvem e puxe o novo .APK pronto:
+git pull origin main
+```
+Após o `git pull origin main`, o arquivo **`app_mobile\ELOS_Caixa.apk`** estará atualizado com a versão mais nova!
+
+---
+
+#### 💻 Opção C: Compilação 100% Local no PC (Usando Gradle CLI + JDK 17 + Android SDK)
+Caso você tenha o **Java JDK 17** e o **Android SDK** instalados na máquina, pode compilar o `.apk` localmente sem internet rodando:
+
+```powershell
+# 1. Entra na pasta do app e sincroniza os assets web com o projeto Android
+cd app_mobile
+npx cap sync android
+
+# 2. Compila o binário .APK usando o Gradle Wrapper do Android
+cd android
+.\gradlew.bat assembleDebug
+
+# 3. Copia o .APK gerado para a pasta principal do app_mobile com o nome final
+Copy-Item -Force "app\build\outputs\apk\debug\app-debug.apk" "..\ELOS_Caixa.apk"
+cd ..\..
+```
+*(Ou simplesmente `cd app_mobile` e `npm run build:local`).*
 
 ---
 
@@ -200,6 +243,7 @@ Projeto_ELOS/
 │   │   └── main.cpp               # Firmware principal da Caixa Inteligente (BLE + OLED + NVS)
 │   └── Pulseira/
 │       └── main.cpp               # Firmware base da Pulseira (XIAO ESP32-C3 + ESP-NOW)
+├── compilar_apk.ps1               # Script de 1 comando para compilar e atualizar o ELOS_Caixa.apk
 ├── platformio.ini                 # Configuração dos ambientes [env:caixa] e [env:pulseira]
 └── README.md                      # Documentação principal do ecossistema E.L.O.S.
 ```
