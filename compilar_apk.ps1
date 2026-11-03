@@ -5,8 +5,10 @@
 
 $ErrorActionPreference = "Continue"
 
+# Garante que estamos sempre na pasta raiz do projeto (mesmo se chamado de outra subpasta)
+Set-Location $PSScriptRoot
+
 Write-Host "`n[1/4] Preparando versao e sincronizando arquivos (HTML/CSS/JS) com o Android..." -ForegroundColor Cyan
-# Grava o horario exato da compilacao para garantir que o APK seja sempre regenerado
 $agora = Get-Date -Format "dd/MM/yyyy HH:mm:ss"
 "{ `"compiladoEm`": `"$agora`" }" | Set-Content -Path "app_mobile\www\build-info.json" -Encoding UTF8
 
@@ -14,20 +16,8 @@ Push-Location app_mobile
 npx cap sync android
 Pop-Location
 
-# Se o Android SDK estiver instalado localmente no PC, compila direto via Gradle local!
-$sdkLocal = "$env:LOCALAPPDATA\Android\Sdk"
-if ((Test-Path $sdkLocal) -or $env:ANDROID_HOME) {
-    Write-Host "`n[2/4] Android SDK local detectado! Compilando APK localmente com Gradle..." -ForegroundColor Green
-    Push-Location app_mobile\android
-    .\gradlew.bat assembleDebug
-    Pop-Location
-    Copy-Item -Force "app_mobile\android\app\build\outputs\apk\debug\app-debug.apk" "app_mobile\ELOS_Caixa.apk"
-    Write-Host "`n✅ APK compilado com sucesso em: app_mobile\ELOS_Caixa.apk ($agora)" -ForegroundColor Green
-    exit 0
-}
-
 Write-Host "`n[2/4] Salvando alteracoes locais e enviando para o compilador..." -ForegroundColor Cyan
-git add -A
+git add app_mobile/www app_mobile/android app_mobile/package.json app_mobile/capacitor.config.json .github compilar_apk.ps1 README.md
 git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {
     git commit -m "build: Gera nova versao do APK ($agora)"
@@ -69,7 +59,7 @@ git pull --rebase origin main
 $infoApk = Get-Item "app_mobile\ELOS_Caixa.apk" -ErrorAction SilentlyContinue
 if ($infoApk) {
     $tamMB = [math]::Round($infoApk.Length / 1MB, 2)
-    Write-Host "`n✅ PRONTO! APK atualizado com sucesso!" -ForegroundColor Green
+    Write-Host "`n✅ PRONTO! APK gerado e atualizado com sucesso!" -ForegroundColor Green
     Write-Host "   Arquivo : app_mobile\ELOS_Caixa.apk ($tamMB MB)" -ForegroundColor White
     Write-Host "   Data    : $($infoApk.LastWriteTime)" -ForegroundColor White
 }

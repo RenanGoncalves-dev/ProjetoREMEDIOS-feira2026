@@ -54,5 +54,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -- .
+          git pull --rebase origin main
+          cp app_mobile/android/app/build/outputs/apk/debug/app-debug.apk app_mobile/ELOS_Caixa.apk
           git add -f app_mobile/ELOS_Caixa.apk
-          git diff --staged --quiet || (git commit -m "chore: Atualiza ELOS_Caixa.apk compilado [skip ci]" && git pull --rebase -X ours origin main && git push origin HEAD:main)
+          git diff --staged --quiet || (git commit -m "chore: Atualiza ELOS_Caixa.apk compilado [skip ci]" && git push origin HEAD:main)
