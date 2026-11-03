@@ -31,29 +31,7 @@ A ativação pode ser realizada através de:
 
 - 🌐 Interface Web hospedada pelo ESP32
 - 🔘 Botão físico
-- 🔊 Aviso sonoro através de buzzer
 
-Fluxo básico:
-
-```text
-Usuário
-   │
-   ├── Interface Web
-   │
-   └── Botão físico
-          │
-          ▼
-        ESP32
-          │
-          ▼
-       ULN2003
-          │
-          ▼
-      28BYJ-48
-          │
-          ▼
-   Compartimento
-```
 
 ---
 
@@ -66,8 +44,6 @@ Usuário
 | ESP32 DevKit V1 | 1 |
 | Motor de passo 28BYJ-48 | 1 |
 | Driver ULN2003 | 1 |
-| Buzzer ativo 5V | 1 |
-| Botão push-button | 1 |
 | Estrutura mecânica impressa em 3D | 1 |
 
 ---
@@ -84,13 +60,6 @@ Usuário
 | GPIO 21 | IN4 |
 
 ### Interface
-
-| Componente | GPIO |
-|---|---:|
-| Botão | GPIO 4 |
-| Buzzer | GPIO 15 |
-
-O botão utiliza `INPUT_PULLUP`, portanto o acionamento ocorre em nível lógico **LOW**.
 
 ---
 
