@@ -5,7 +5,11 @@
 
 $ErrorActionPreference = "Continue"
 
-Write-Host "`n[1/4] Sincronizando arquivos web (HTML/CSS/JS) com o projeto Android (Capacitor)..." -ForegroundColor Cyan
+Write-Host "`n[1/4] Preparando versao e sincronizando arquivos (HTML/CSS/JS) com o Android..." -ForegroundColor Cyan
+# Grava o horario exato da compilacao para garantir que o APK seja sempre regenerado
+$agora = Get-Date -Format "dd/MM/yyyy HH:mm:ss"
+"{ `"compiladoEm`": `"$agora`" }" | Set-Content -Path "app_mobile\www\build-info.json" -Encoding UTF8
+
 Push-Location app_mobile
 npx cap sync android
 Pop-Location
@@ -18,26 +22,23 @@ if ((Test-Path $sdkLocal) -or $env:ANDROID_HOME) {
     .\gradlew.bat assembleDebug
     Pop-Location
     Copy-Item -Force "app_mobile\android\app\build\outputs\apk\debug\app-debug.apk" "app_mobile\ELOS_Caixa.apk"
-    Write-Host "`n✅ APK compilado com sucesso em: app_mobile\ELOS_Caixa.apk" -ForegroundColor Green
+    Write-Host "`n✅ APK compilado com sucesso em: app_mobile\ELOS_Caixa.apk ($agora)" -ForegroundColor Green
     exit 0
 }
 
-Write-Host "`n[2/4] Salvando alteracoes locais e sincronizando com o GitHub..." -ForegroundColor Cyan
-# 1. Salva TODAS as alteracoes locais primeiro (evita o erro 'You have unstaged changes')
+Write-Host "`n[2/4] Salvando alteracoes locais e enviando para o compilador..." -ForegroundColor Cyan
 git add -A
 git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {
-    git commit -m "build: Atualiza codigo do aplicativo para gerar novo APK"
+    git commit -m "build: Gera nova versao do APK ($agora)"
 }
 
-# 2. Agora com os arquivos salvos, sincroniza com o GitHub sem conflito
 git pull --rebase -X ours origin main
 if ($LASTEXITCODE -ne 0) {
     git rebase --abort 2>$null
     git pull --no-edit -X ours origin main
 }
 
-# Guarda o hash atual antes do push para saber quando o GitHub Actions terminar de gerar o APK novo
 $hashAntes = (git rev-parse HEAD).Trim()
 
 git push origin main
@@ -46,11 +47,11 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Host "`n[3/4] Aguardando o GitHub Actions compilar o novo ELOS_Caixa.apk..." -ForegroundColor Yellow
+Write-Host "`n[3/4] Compilando o novo ELOS_Caixa.apk na nuvem (aguarde ~60 a 90 segundos)..." -ForegroundColor Yellow
 $tempoDecorrido = 0
 $compilou = $false
 
-while ($tempoDecorrido -lt 150) {
+while ($tempoDecorrido -lt 180) {
     Start-Sleep -Seconds 10
     $tempoDecorrido += 10
     git fetch origin main 2>$null
@@ -59,14 +60,16 @@ while ($tempoDecorrido -lt 150) {
         $compilou = $true
         break
     }
-    Write-Host "   Compilando na nuvem... ($tempoDecorrido s)" -ForegroundColor DarkGray
+    Write-Host "   Compilando APK... ($tempoDecorrido s)" -ForegroundColor DarkGray
 }
 
 Write-Host "`n[4/4] Baixando o novo ELOS_Caixa.apk pronto para a sua pasta..." -ForegroundColor Cyan
 git pull --rebase origin main
 
-if ($compilou) {
-    Write-Host "`n✅ Pronto! O seu novo instalador ja esta atualizado em: app_mobile\ELOS_Caixa.apk" -ForegroundColor Green
-} else {
-    Write-Host "`n⚠️ A compilacao ainda esta finalizando no GitHub. Rode 'git pull origin main' em alguns segundos." -ForegroundColor Yellow
+$infoApk = Get-Item "app_mobile\ELOS_Caixa.apk" -ErrorAction SilentlyContinue
+if ($infoApk) {
+    $tamMB = [math]::Round($infoApk.Length / 1MB, 2)
+    Write-Host "`n✅ PRONTO! APK atualizado com sucesso!" -ForegroundColor Green
+    Write-Host "   Arquivo : app_mobile\ELOS_Caixa.apk ($tamMB MB)" -ForegroundColor White
+    Write-Host "   Data    : $($infoApk.LastWriteTime)" -ForegroundColor White
 }
