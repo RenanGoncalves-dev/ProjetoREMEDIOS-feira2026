@@ -12,10 +12,13 @@ const char* passwordAP = "verde123";
 
 uint8_t broadcastAddress[] = {0x84, 0xFC, 0xE6, 0x00, 0xD3, 0x38};
 
+//Stepper Mottor
 #define IN1 5
 #define IN2 18
 #define IN3 19
 #define IN4 21
+
+//visor oled
 #define OLED_SDA 14
 #define OLED_SCL 27
 
