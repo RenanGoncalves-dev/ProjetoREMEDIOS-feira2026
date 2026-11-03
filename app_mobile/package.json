@@ -4,7 +4,8 @@
   "description": "Aplicativo Bluetooth da Caixa Inteligente de Remedios E.L.O.S.",
   "main": "www/index.html",
   "scripts": {
-    "sync": "cap sync android"
+    "sync": "cap sync android",
+    "build:local": "cap sync android && cd android && gradlew.bat assembleDebug && copy /Y app\\build\\outputs\\apk\\debug\\app-debug.apk ..\\ELOS_Caixa.apk"
   },
   "dependencies": {
     "@capacitor-community/bluetooth-le": "^6.0.0",
@@ -15,4 +16,3 @@
     "@capacitor/cli": "^6.0.0"
   }
 }
-

@@ -145,3 +145,4 @@ const ElosApp = (function () {
 })();
 
 document.addEventListener('DOMContentLoaded', ElosApp.init);
+

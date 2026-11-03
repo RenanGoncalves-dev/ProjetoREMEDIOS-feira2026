@@ -185,3 +185,4 @@ const ElosBluetooth = (function () {
     onConnectionChange: (cb) => { onConnectionChangeCallback = cb; }
   };
 })();
+
