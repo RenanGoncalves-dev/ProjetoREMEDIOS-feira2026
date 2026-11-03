@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2563eb">
+<title>E.L.O.S. App Bluetooth</title>
+<script>
+  (function(){
+    var t = localStorage.getItem('elos-theme');
+    if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg:#f1f5f9; --surface:#ffffff; --surface2:#f8fafc; --text:#0f172a; --muted:#64748b;
+    --border:#e2e8f0; --primary:#2563eb; --on-primary:#ffffff; --soft:#dbeafe;
+    --ok:#16a34a; --warn:#d97706; --danger:#dc2626; --shadow:0 4px 16px rgba(15,23,42,.08);
+  }
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg:#0b1220; --surface:#131c2e; --surface2:#1a2540; --text:#e5e7eb; --muted:#94a3b8;
+    --border:#263350; --primary:#60a5fa; --on-primary:#0b1220; --soft:#1e3a5f;
+    --ok:#4ade80; --warn:#fbbf24; --danger:#f87171; --shadow:0 4px 16px rgba(0,0,0,.5);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; line-height: 1.4;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    transition: background .25s, color .25s;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 1.1rem; margin: 0; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); display: inline-block; }
+  .dot.on { background: var(--ok); }
+  .header-actions { display: flex; align-items: center; gap: 8px; }
+  .bt-btn {
+    border: 0; background: var(--primary); color: var(--on-primary); height: 42px; padding: 0 14px;
+    border-radius: 12px; font-size: .9rem; font-weight: 700; cursor: pointer;
+  }
+  .bt-btn.connected { background: var(--ok); color: #fff; }
+  .icon-btn {
+    border: 1px solid var(--border); background: var(--surface2); color: var(--text); width: 42px; height: 42px;
+    border-radius: 12px; font-size: 1.2rem; cursor: pointer;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: 1fr; }
+  @media (min-width: 800px) {
+    main { grid-template-columns: 1fr 1fr; align-items: start; }
+    .full { grid-column: 1 / -1; }
+  }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px; box-shadow: var(--shadow); }
+  .card h2 { font-size: 1rem; margin: 0 0 14px; }
+  .muted { color: var(--muted); font-size: .85rem; }
+
+  .hero { text-align: center; background: linear-gradient(135deg, var(--soft), var(--surface)); }
+  .countdown { font-size: clamp(2.4rem, 12vw, 3.6rem); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--primary); letter-spacing: 1px; margin: 4px 0; }
+
+  .stock-num { font-size: 2.6rem; font-weight: 700; text-align: center; }
+  .bar { height: 12px; border-radius: 99px; background: var(--surface2); border: 1px solid var(--border); overflow: hidden; margin: 8px 0 4px; }
+  .bar > div { height: 100%; width: 0; background: var(--ok); transition: width .4s, background .4s; }
+
+  label { display: block; font-size: .85rem; font-weight: 600; margin: 12px 0 6px; }
+  input, select {
+    width: 100%; padding: 12px; font-size: 16px;
+    border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text);
+  }
+  input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-weight: 500; }
+  .check input { width: 20px; height: 20px; }
+  .hidden { display: none; }
+
+  .btn {
+    width: 100%; min-height: 48px; margin-top: 14px; border: 0; border-radius: 12px; cursor: pointer;
+    font-size: 1rem; font-weight: 700; color: var(--on-primary); background: var(--primary);
+  }
+  .btn:active { transform: scale(.98); opacity: .85; }
+  .btn.ok { background: var(--ok); color: #fff; }
+  .btn.warn { background: var(--warn); color: #fff; }
+  .btn.danger { background: var(--danger); color: #fff; }
+
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px dashed var(--border); }
+  li:last-child { border-bottom: 0; }
+  li .info { flex: 1; min-width: 0; }
+  li .info strong { display: block; overflow-wrap: anywhere; }
+  li .time { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--primary); }
+  li .del { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--danger); font-size: 1rem; cursor: pointer; }
+  .empty { color: var(--muted); font-style: italic; justify-content: center; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translate(-50%, 30px);
+    background: var(--text); color: var(--bg); padding: 12px 18px; border-radius: 12px; opacity: 0;
+    pointer-events: none; transition: .3s; max-width: 90vw; text-align: center; z-index: 20;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="conn" class="dot" title="Status Bluetooth"></span> E.L.O.S. Bluetooth</h1>
+  <div class="header-actions">
+    <button class="bt-btn" id="btBtn" onclick="alternarBluetooth()">🔵 Conectar Caixa</button>
+    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" aria-label="Alternar tema">🌙</button>
+  </div>
+</header>
+
+<main>
+  <!-- PRÓXIMA DOSE -->
+  <section class="card hero full">
+    <div class="muted">Próxima dose em</div>
+    <div class="countdown" id="proxTempo">--:--:--</div>
+    <div class="muted" id="proxDesc">Conecte via Bluetooth para sincronizar</div>
+  </section>
+
+  <!-- ESTOQUE -->
+  <section class="card">
+    <h2>📦 Estoque</h2>
+    <div class="stock-num"><span id="eOcup">-</span> / <span id="eTotal">-</span></div>
+    <div class="bar"><div id="eBar"></div></div>
+    <div class="muted" style="text-align:center">Ocupados / Capacidade total</div>
+
+    <div class="row">
+      <div><label for="inp_total">Capacidade</label><input type="number" id="inp_total" min="1" value="7" inputmode="numeric"></div>
+      <div><label for="inp_ocupados">Abastecidos</label><input type="number" id="inp_ocupados" min="0" placeholder="Ex: 7" inputmode="numeric"></div>
+    </div>
+    <button class="btn warn" onclick="atualizarEstoque()">🔄 Atualizar estoque</button>
+    <button class="btn" id="btnDispense" onclick="dispensar()">💊 Dispensar uma dose agora</button>
+  </section>
+
+  <!-- AGENDAR -->
+  <section class="card">
+    <h2>⏰ Agendar nova dose</h2>
+    <label for="modo">Tipo de agendamento</label>
+    <select id="modo" onchange="mudaModo()">
+      <option value="horario">Horário exato (ex: 18:15)</option>
+      <option value="cronometro">Cronômetro (daqui a X tempo)</option>
+      <option value="intervalo">Intervalo (a cada X horas)</option>
+    </select>
+
+    <div id="div_horario">
+      <label for="h_time">Hora</label>
+      <input type="time" id="h_time">
+      <label class="check"><input type="checkbox" id="h_diario"> Repetir todos os dias</label>
+    </div>
+    <div id="div_cronometro" class="hidden">
+      <div class="row">
+        <div><label for="c_horas">Horas</label><input type="number" id="c_horas" min="0" max="99" placeholder="0" inputmode="numeric"></div>
+        <div><label for="c_mins">Minutos</label><input type="number" id="c_mins" min="0" max="59" placeholder="0" inputmode="numeric"></div>
+      </div>
+    </div>
+    <div id="div_intervalo" class="hidden">
+      <label for="i_horas">Repetir a cada (horas)</label>
+      <input type="number" id="i_horas" min="1" max="99" placeholder="Ex: 8" inputmode="numeric">
+    </div>
+    <button class="btn ok" onclick="salvarAgendamento()">➕ Adicionar à lista</button>
+  </section>
+
+  <!-- LISTA -->
+  <section class="card full">
+    <h2>📋 Agendamentos ativos</h2>
+    <ul id="lista"><li class="empty">Desconectado</li></ul>
+    <button class="btn danger" id="btnLimpar" onclick="limparAgendamentos()">🗑️ Limpar todos</button>
+  </section>
+</main>
+
+<div id="toast" role="status"></div>
+
+<script>
+  const $ = id => document.getElementById(id);
+
+  // UUIDs Nordic UART Service (mesmos configurados no ESP32)
+  const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+  const CHAR_RX_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+  const CHAR_TX_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+
+  let bleDevice = null;
+  let rxChar = null;
+  let txChar = null;
+  let bufferRecepcao = '';
+
+  let dados = { ocupados: 0, total: 7, agendamentos: [] };
+  let ultimaLeitura = Date.now();
+  let totalInicializado = false;
+
+  /* ---------- Tema ---------- */
+  function atualizaIconeTema() {
+    $('themeBtn').textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '☀️' : '🌙';
+  }
+  function toggleTheme() {
+    const novo = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', novo);
+    localStorage.setItem('elos-theme', novo);
+    atualizaIconeTema();
+  }
+  atualizaIconeTema();
+
+  /* ---------- Utilidades ---------- */
+  let toastTimer;
+  function aviso(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+  }
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+    return [h, m, x].map(n => String(n).padStart(2, '0')).join(':');
+  }
+
+  /* ---------- Conexão Bluetooth BLE ---------- */
+  async function alternarBluetooth() {
+    if (bleDevice && bleDevice.gatt.connected) {
+      bleDevice.gatt.disconnect();
+      return;
+    }
+    if (!navigator.bluetooth) {
+      return aviso('⚠️ Use o Chrome no Android ou o APK com suporte BLE.');
+    }
+    try {
+      aviso('🔍 Procurando ELOS_Caixa...');
+      bleDevice = await navigator.bluetooth.requestDevice({
+        filters: [{ name: 'ELOS_Caixa' }, { services: [SERVICE_UUID] }],
+        optionalServices: [SERVICE_UUID]
+      });
+      bleDevice.addEventListener('gattserverdisconnected', aoDesconectar);
+
+      const server = await bleDevice.gatt.connect();
+      const service = await server.getPrimaryService(SERVICE_UUID);
+      rxChar = await service.getCharacteristic(CHAR_RX_UUID);
+      txChar = await service.getCharacteristic(CHAR_TX_UUID);
+
+      await txChar.startNotifications();
+      txChar.addEventListener('characteristicvaluechanged', aoReceberDadosBLE);
+
+      $('conn').classList.add('on');
+      $('btBtn').textContent = '🟢 Conectado';
+      $('btBtn').classList.add('connected');
+      aviso('✅ Conectado à ELOS_Caixa!');
+
+      await enviarComandoBLE('STATUS');
+    } catch (e) {
+      console.error(e);
+      aviso('⚠️ Conexão Bluetooth cancelada ou falhou.');
+    }
+  }
+
+  function aoDesconectar() {
+    $('conn').classList.remove('on');
+    $('btBtn').textContent = '🔵 Conectar Caixa';
+    $('btBtn').classList.remove('connected');
+    rxChar = null;
+    txChar = null;
+    aviso('🔴 Caixa desconectada.');
+  }
+
+  function aoReceberDadosBLE(event) {
+    const chunk = new TextDecoder().decode(event.target.value);
+    bufferRecepcao += chunk;
+    let idx;
+    while ((idx = bufferRecepcao.indexOf('\n')) !== -1) {
+      const linha = bufferRecepcao.slice(0, idx).trim();
+      bufferRecepcao = bufferRecepcao.slice(idx + 1);
+      if (linha) processarLinhaRecebida(linha);
+    }
+  }
+
+  function processarLinhaRecebida(linha) {
+    try {
+      const json = JSON.parse(linha);
+      if (json.evento) {
+        if (json.evento === 'DISPENSADO') aviso('💊 Dose liberada!');
+        else if (json.evento === 'VAZIO') aviso('⚠️ A caixa está VAZIA!');
+        else if (json.evento === 'FULL') aviso('⚠️ Limite de 8 agendamentos atingido!');
+        else if (json.evento === 'AGENDADO') aviso('✅ Dose agendada com sucesso!');
+        return;
+      }
+      if (typeof json.ocupados === 'number') {
+        dados = json;
+        ultimaLeitura = Date.now();
+        if (!totalInicializado) {
+          $('inp_total').value = dados.total;
+          totalInicializado = true;
+        }
+        desenhar();
+      }
+    } catch (e) {
+      console.log('Recebido:', linha);
+    }
+  }
+
+  async function enviarComandoBLE(cmd) {
+    if (!rxChar || !bleDevice || !bleDevice.gatt.connected) {
+      aviso('⚠️ Conecte na caixa via Bluetooth primeiro!');
+      return false;
+    }
+    try {
+      const bytes = new TextEncoder().encode(cmd + '\n');
+      // Envia em blocos de 20 bytes para máxima compatibilidade BLE
+      for (let i = 0; i < bytes.length; i += 20) {
+        const pedaco = bytes.slice(i, i + 20);
+        await rxChar.writeValue(pedaco);
+      }
+      return true;
+    } catch (e) {
+      console.error(e);
+      aviso('Erro ao enviar comando Bluetooth.');
+      return false;
+    }
+  }
+
+  /* ---------- Desenho da Interface ---------- */
+  function desenhar() {
+    const passou = (Date.now() - ultimaLeitura) / 1000;
+
+    $('eOcup').textContent = dados.ocupados;
+    $('eTotal').textContent = dados.total;
+    const pct = dados.total > 0 ? (dados.ocupados / dados.total) * 100 : 0;
+    const bar = $('eBar');
+    bar.style.width = pct + '%';
+    bar.style.background = pct <= 15 ? 'var(--danger)' : pct <= 40 ? 'var(--warn)' : 'var(--ok)';
+
+    const ul = $('lista');
+    ul.innerHTML = '';
+    const itens = dados.agendamentos || [];
+    let menor = null;
+
+    if (itens.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'empty'; li.textContent = 'Nenhum agendamento programado';
+      ul.appendChild(li);
+    }
+    itens.forEach(a => {
+      const resta = Math.max(0, a.restante - passou);
+      if (menor === null || resta < menor.resta) menor = { resta, desc: a.desc };
+
+      const li = document.createElement('li');
+      const info = document.createElement('div'); info.className = 'info';
+      const nome = document.createElement('strong'); nome.textContent = a.desc;
+      const sub = document.createElement('span'); sub.className = 'muted';
+      sub.textContent = a.repete > 0 ? 'Repete a cada ' + fmt(a.repete) : 'Dose única';
+      info.append(nome, sub);
+
+      const tempo = document.createElement('span'); tempo.className = 'time'; tempo.textContent = fmt(resta);
+
+      const del = document.createElement('button'); del.className = 'del'; del.textContent = '✕';
+      del.setAttribute('aria-label', 'Remover agendamento');
+      del.onclick = () => enviarComandoBLE('REMOVER:' + a.id);
+
+      li.append(info, tempo, del);
+      ul.appendChild(li);
+    });
+
+    $('proxTempo').textContent = menor ? fmt(menor.resta) : '--:--:--';
+    $('proxDesc').textContent = menor ? menor.desc : 'Nenhum agendamento ativo';
+
+    if (menor && menor.resta <= 0 && Date.now() - ultimaLeitura > 2500 && rxChar) {
+      enviarComandoBLE('STATUS');
+    }
+  }
+
+  setInterval(desenhar, 1000);
+
+  /* ---------- Ações dos Botões ---------- */
+  function dispensar() {
+    enviarComandoBLE('DISPENSAR');
+  }
+
+  function atualizarEstoque() {
+    const t = $('inp_total').value, o = $('inp_ocupados').value;
+    if (o === '' || t === '') return aviso('⚠️ Preencha os dois valores!');
+    if (enviarComandoBLE(`ESTOQUE:${t}:${o}`)) {
+      $('inp_ocupados').value = '';
+      aviso('✅ Estoque atualizado!');
+    }
+  }
+
+  function limparAgendamentos() {
+    if (!confirm('Deseja apagar todos os horários agendados?')) return;
+    enviarComandoBLE('LIMPAR');
+  }
+
+  function mudaModo() {
+    ['horario', 'cronometro', 'intervalo'].forEach(m => $('div_' + m).classList.add('hidden'));
+    $('div_' + $('modo').value).classList.remove('hidden');
+  }
+
+  function salvarAgendamento() {
+    const modo = $('modo').value;
+    let delay = 0, repetir = 0, desc = '';
+
+    if (modo === 'horario') {
+      const t = $('h_time').value;
+      if (!t) return aviso('⚠️ Preencha o horário!');
+      const p = t.split(':');
+      const agora = new Date();
+      const alvo = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate(), +p[0], +p[1], 0);
+      if (alvo <= agora) alvo.setDate(alvo.getDate() + 1);
+      delay = Math.floor((alvo - agora) / 1000);
+      if ($('h_diario').checked) { repetir = 86400; desc = 'Todos os dias às ' + t; }
+      else desc = 'Às ' + t;
+    } else if (modo === 'cronometro') {
+      const h = parseInt($('c_horas').value || 0), m = parseInt($('c_mins').value || 0);
+      if (h === 0 && m === 0) return aviso('⚠️ Insira um tempo!');
+      delay = h * 3600 + m * 60;
+      desc = 'Daqui a ' + h + 'h ' + m + 'm';
+    } else {
+      const h = parseInt($('i_horas').value || 0);
+      if (h <= 0) return aviso('⚠️ Preencha as horas!');
+      delay = h * 3600; repetir = h * 3600;
+      desc = 'A cada ' + h + ' horas';
+    }
+
+    enviarComandoBLE(`AGENDAR:${delay}:${repetir}:${desc}`);
+  }
+</script>
+</body>
+</html>
+

@@ -1,0 +1,6 @@
+{
+  "appId": "com.elos.caixa",
+  "appName": "ELOS Caixa",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}

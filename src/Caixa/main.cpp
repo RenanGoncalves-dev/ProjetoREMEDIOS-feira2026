@@ -1,41 +1,113 @@
 #include <Arduino.h>
-#include <WiFi.h>
-//#include <esp_now.h>
-#include <WebServer.h>
 #include <Stepper.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <Preferences.h>
 
-const char* ssidAP = "GREENLANTERN 2532";
-const char* passwordAP = "verde123";
+// ============================================================================
+// CONFIGURAÇÕES DE MODO (BLUETOOTH E PULSEIRA)
+// ============================================================================
+// 0 = Bluetooth Low Energy (BLE UART) -> Ideal para App HTML/APK moderno, Flutter, Web Bluetooth
+// 1 = Bluetooth Clássico (SerialBT SPP) -> Ideal se for criar APK no MIT App Inventor / Kodular padrão
+#define USAR_BLUETOOTH_CLASSICO 0
 
-uint8_t broadcastAddress[] = {0x84, 0xFC, 0xE6, 0x00, 0xD3, 0x38};
+// 0 = Pulseira desativada (pronta para quando você modelar em 3D e programar)
+// 1 = Ativa o envio de alertas para a Pulseira via ESP-NOW (sem precisar de roteador!)
+#define ATIVAR_PULSEIRA 0
 
-//Stepper Mottor
+#define NOME_BLUETOOTH "ELOS_Caixa"
+
+#if USAR_BLUETOOTH_CLASSICO
+  #include <BluetoothSerial.h>
+  BluetoothSerial SerialBT;
+#else
+  #include <BLEDevice.h>
+  #include <BLEServer.h>
+  #include <BLEUtils.h>
+  #include <BLE2902.h>
+
+  // UUIDs padrão do Nordic UART Service (compatível com qualquer App BLE e Web Bluetooth)
+  #define SERVICE_UUID           "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+  #define CHARACTERISTIC_UUID_RX "6e400002-b5a3-f393-e0a9-e50e24dcca9e" // Celular -> Caixa
+  #define CHARACTERISTIC_UUID_TX "6e400003-b5a3-f393-e0a9-e50e24dcca9e" // Caixa -> Celular
+
+  BLEServer* pServer = nullptr;
+  BLECharacteristic* pTxCharacteristic = nullptr;
+  bool bleConectado = false;
+  bool bleConectadoAnterior = false;
+  String filaComandoBLE = "";
+  volatile bool comandoBLERecebido = false;
+#endif
+
+#if ATIVAR_PULSEIRA
+  #include <WiFi.h>
+  #include <esp_now.h>
+#endif
+
+// ============================================================================
+// HARDWARE: MOTOR DE PASSO E DISPLAY OLED
+// ============================================================================
 #define IN1 5
 #define IN2 18
 #define IN3 19
 #define IN4 21
 
-//visor oled
 #define OLED_SDA 14
 #define OLED_SCL 27
 
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 Stepper myStepper(2048, IN1, IN3, IN2, IN4);
-WebServer server(80);
+Preferences prefs;
 
-typedef struct struct_message { int comando; } struct_message;
-struct_message myData;
-//esp_now_peer_info_t peerInfo;
+// ============================================================================
+// ESTRUTURA PRONTA PARA A PULSEIRA (FUTURA IMPLEMENTAÇÃO)
+// ============================================================================
+uint8_t macPulseira[] = {0x84, 0xFC, 0xE6, 0x00, 0xD3, 0x38};
 
-// --- ESTOQUE ---
+// Códigos de evento que a Caixa poderá mandar para a Pulseira:
+// 1 = Dose dispensada (tomar remédio!)
+// 2 = Alerta de Caixa Vazia (precisa reabastecer)
+typedef struct struct_message {
+  int comando;
+  int slotsRestantes;
+} struct_message;
+
+struct_message dadosPulseira;
+
+void iniciarComunicacaoPulseira() {
+#if ATIVAR_PULSEIRA
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(); // Garante operação offline sem depender de roteador
+  if (esp_now_init() == ESP_OK) {
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, macPulseira, 6);
+    peerInfo.channel = 1; // Canal fixo offline
+    peerInfo.encrypt = false;
+    esp_now_add_peer(&peerInfo);
+    Serial.println("[PULSEIRA] Interface ESP-NOW pronta.");
+  }
+#endif
+}
+
+void notificarPulseira(int codigoComando) {
+  dadosPulseira.comando = codigoComando;
+#if ATIVAR_PULSEIRA
+  esp_now_send(macPulseira, (uint8_t*)&dadosPulseira, sizeof(dadosPulseira));
+  Serial.printf("[PULSEIRA] Evento %d enviado para a pulseira.\n", codigoComando);
+#else
+  // Gancho pronto: quando programar a pulseira, mude ATIVAR_PULSEIRA para 1
+  Serial.printf("[PULSEIRA - STANDBY] Evento %d gerado (aguardando integracao futura).\n", codigoComando);
+#endif
+}
+
+// ============================================================================
+// ESTADO DA CAIXA: ESTOQUE E AGENDAMENTOS
+// ============================================================================
 int capacidadeTotal = 7;
 int slotsOcupados = 0;
 bool emUso = false;
 
-// --- AGENDAMENTOS ---
 #define MAX_AGENDAMENTOS 8
 struct Agendamento {
   unsigned long alvoMillis;
@@ -45,24 +117,43 @@ struct Agendamento {
 };
 Agendamento listaAgendamentos[MAX_AGENDAMENTOS];
 
-// --- CONTROLE DO OLED (mensagens temporárias + tela principal) ---
+// Controle do OLED
 bool msgAtiva = false;
 unsigned long msgAte = 0;
 unsigned long ultimoRefresh = 0;
 
-// ======================= UTILIDADES =======================
+// Buffer Serial USB (permite testar os mesmos comandos do Bluetooth pelo PC)
+String bufferSerial = "";
 
+// ============================================================================
+// PERSISTÊNCIA NA MEMÓRIA FLASH (NVS)
+// ============================================================================
+void salvarEstoqueNaFlash() {
+  prefs.begin("elos", false);
+  prefs.putInt("total", capacidadeTotal);
+  prefs.putInt("ocupados", slotsOcupados);
+  prefs.end();
+}
+
+void carregarEstoqueDaFlash() {
+  prefs.begin("elos", true);
+  capacidadeTotal = prefs.getInt("total", 7);
+  slotsOcupados = prefs.getInt("ocupados", 0);
+  prefs.end();
+}
+
+// ============================================================================
+// UTILIDADES E DISPLAY OLED
+// ============================================================================
 void stopMotor() {
   digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
   digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
 }
 
-// Tempo restante em ms (aritmética com sinal: seguro contra estouro do millis)
 long restanteMs(int i) {
   return (long)(listaAgendamentos[i].alvoMillis - millis());
 }
 
-// Índice do agendamento ativo mais próximo (-1 se não houver)
 int proximoAgendamento() {
   int idx = -1;
   long menor = 0;
@@ -82,7 +173,13 @@ void formatarTempo(long ms, char* buf, size_t tam) {
   snprintf(buf, tam, "%02ld:%02ld:%02ld", h, m, x);
 }
 
-// ======================= OLED =======================
+bool bluetoothEstaConectado() {
+#if USAR_BLUETOOTH_CLASSICO
+  return SerialBT.hasClient();
+#else
+  return bleConectado;
+#endif
+}
 
 void updateDisplay(String linha1, String linha2) {
   display.clearDisplay();
@@ -96,23 +193,27 @@ void updateDisplay(String linha1, String linha2) {
   display.display();
 }
 
-// Mostra uma mensagem por "ms" milissegundos e depois volta à tela principal
 void showMessage(String l1, String l2, unsigned long ms = 2500) {
   updateDisplay(l1, l2);
   msgAtiva = true;
   msgAte = millis() + ms;
 }
 
-// Tela principal: estoque + cronômetro regressivo da próxima dose
 void telaPrincipal() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
+  // Linha superior: Status do Bluetooth
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.print("IP:");
-  display.print(WiFi.localIP());   // fica sempre visível (0.0.0.0 = sem Wi-Fi)
+  if (bluetoothEstaConectado()) {
+    display.print("BT: Conectado [APP]");
+  } else {
+    display.print("BT: ");
+    display.print(NOME_BLUETOOTH);
+  }
 
+  // Estoque
   display.setTextSize(2);
   display.setCursor(0, 12);
   display.print("Est:");
@@ -120,6 +221,7 @@ void telaPrincipal() {
   display.print("/");
   display.print(capacidadeTotal);
 
+  // Próximo agendamento
   display.setTextSize(1);
   display.setCursor(0, 36);
 
@@ -140,382 +242,37 @@ void telaPrincipal() {
   display.display();
 }
 
-// ======================= DISPENSADOR =======================
+// ============================================================================
+// COMUNICAÇÃO BLUETOOTH (ENVIO E RECEBIMENTO)
+// ============================================================================
 
-void acionarDispensador() {
-  if (slotsOcupados > 0 && !emUso) {
-    emUso = true;
-    slotsOcupados--;
+// Envia uma linha (JSON ou resposta) para o celular via Bluetooth e para a Serial USB
+void enviarRespostaBT(const String& msg) {
+  String linha = msg + "\n";
+  Serial.print("[BT TX] " + linha);
 
-    updateDisplay("Liberando", "Remedio...");
-    myStepper.step(276); // 45 graus (1/8 de volta)
-    stopMotor();
-
-    // myData.comando = 1;
-    // esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
-
-    showMessage("Dose liberada", String(slotsOcupados) + "/" + String(capacidadeTotal), 2500);
-    emUso = false;
-  } else if (slotsOcupados <= 0) {
-    showMessage("ALERTA!", "Caixa Vazia!", 4000);
+#if USAR_BLUETOOTH_CLASSICO
+  if (SerialBT.hasClient()) {
+    SerialBT.print(linha);
   }
+#else
+  if (bleConectado && pTxCharacteristic != nullptr) {
+    // Divide em pacotes de até 20 bytes para compatibilidade total com qualquer celular/MTU
+    const char* str = linha.c_str();
+    size_t len = linha.length();
+    const size_t chunkSize = 20;
+    for (size_t i = 0; i < len; i += chunkSize) {
+      size_t tam = (len - i < chunkSize) ? (len - i) : chunkSize;
+      pTxCharacteristic->setValue((uint8_t*)(str + i), tam);
+      pTxCharacteristic->notify();
+      delay(8); // Pequena pausa para a pilha BLE entregar todos os pacotes em ordem
+    }
+  }
+#endif
 }
 
-// ======================= DASHBOARD WEB (guardado na Flash) =======================
-
-const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#2563eb">
-<title>E.L.O.S. Dashboard</title>
-<script>
-  // Aplica o tema antes de renderizar (evita "piscar" branco no modo escuro)
-  (function(){
-    var t = localStorage.getItem('elos-theme');
-    if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', t);
-  })();
-</script>
-<style>
-  :root {
-    color-scheme: light;
-    --bg:#f1f5f9; --surface:#ffffff; --surface2:#f8fafc; --text:#0f172a; --muted:#64748b;
-    --border:#e2e8f0; --primary:#2563eb; --on-primary:#ffffff; --soft:#dbeafe;
-    --ok:#16a34a; --warn:#d97706; --danger:#dc2626; --shadow:0 4px 16px rgba(15,23,42,.08);
-  }
-  [data-theme="dark"] {
-    color-scheme: dark;
-    --bg:#0b1220; --surface:#131c2e; --surface2:#1a2540; --text:#e5e7eb; --muted:#94a3b8;
-    --border:#263350; --primary:#60a5fa; --on-primary:#0b1220; --soft:#1e3a5f;
-    --ok:#4ade80; --warn:#fbbf24; --danger:#f87171; --shadow:0 4px 16px rgba(0,0,0,.5);
-  }
-  * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; line-height: 1.4;
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-    transition: background .25s, color .25s;
-  }
-  header {
-    position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between;
-    gap: 12px; padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
-  }
-  header h1 { font-size: 1.15rem; margin: 0; display: flex; align-items: center; gap: 8px; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); display: inline-block; }
-  .dot.on { background: var(--ok); }
-  .icon-btn {
-    border: 1px solid var(--border); background: var(--surface2); color: var(--text); width: 44px; height: 44px;
-    border-radius: 12px; font-size: 1.25rem; cursor: pointer;
-  }
-  main { max-width: 960px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: 1fr; }
-  @media (min-width: 800px) {
-    main { grid-template-columns: 1fr 1fr; align-items: start; }
-    .full { grid-column: 1 / -1; }
-  }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px; box-shadow: var(--shadow); }
-  .card h2 { font-size: 1rem; margin: 0 0 14px; }
-  .muted { color: var(--muted); font-size: .85rem; }
-
-  /* Próxima dose */
-  .hero { text-align: center; background: linear-gradient(135deg, var(--soft), var(--surface)); }
-  .countdown { font-size: clamp(2.4rem, 12vw, 3.6rem); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--primary); letter-spacing: 1px; margin: 4px 0; }
-
-  /* Estoque */
-  .stock-num { font-size: 2.6rem; font-weight: 700; text-align: center; }
-  .bar { height: 12px; border-radius: 99px; background: var(--surface2); border: 1px solid var(--border); overflow: hidden; margin: 8px 0 4px; }
-  .bar > div { height: 100%; width: 0; background: var(--ok); transition: width .4s, background .4s; }
-
-  /* Formulários */
-  label { display: block; font-size: .85rem; font-weight: 600; margin: 12px 0 6px; }
-  input, select {
-    width: 100%; padding: 12px; font-size: 16px; /* 16px evita zoom automático no iOS */
-    border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text);
-  }
-  input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
-  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-weight: 500; }
-  .check input { width: 20px; height: 20px; }
-  .hidden { display: none; }
-
-  .btn {
-    width: 100%; min-height: 48px; margin-top: 14px; border: 0; border-radius: 12px; cursor: pointer;
-    font-size: 1rem; font-weight: 700; color: var(--on-primary); background: var(--primary);
-  }
-  .btn:active { transform: scale(.98); opacity: .85; }
-  .btn.ok { background: var(--ok); }
-  .btn.warn { background: var(--warn); }
-  .btn.danger { background: var(--danger); color: #fff; }
-  .btn.ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
-
-  /* Lista */
-  ul { list-style: none; margin: 0; padding: 0; }
-  li { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px dashed var(--border); }
-  li:last-child { border-bottom: 0; }
-  li .info { flex: 1; min-width: 0; }
-  li .info strong { display: block; overflow-wrap: anywhere; }
-  li .time { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--primary); }
-  li .del { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--danger); font-size: 1rem; cursor: pointer; }
-  .empty { color: var(--muted); font-style: italic; justify-content: center; }
-
-  /* Aviso (toast) */
-  #toast {
-    position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translate(-50%, 30px);
-    background: var(--text); color: var(--bg); padding: 12px 18px; border-radius: 12px; opacity: 0;
-    pointer-events: none; transition: .3s; max-width: 90vw; text-align: center; z-index: 20;
-  }
-  #toast.show { opacity: 1; transform: translate(-50%, 0); }
-</style>
-</head>
-<body>
-<header>
-  <h1><span id="conn" class="dot" title="Conexão com a placa"></span> Painel E.L.O.S.</h1>
-  <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" aria-label="Alternar tema">🌙</button>
-</header>
-
-<main>
-  <!-- PRÓXIMA DOSE -->
-  <section class="card hero full">
-    <div class="muted">Próxima dose em</div>
-    <div class="countdown" id="proxTempo">--:--:--</div>
-    <div class="muted" id="proxDesc">Nenhum agendamento ativo</div>
-  </section>
-
-  <!-- ESTOQUE -->
-  <section class="card">
-    <h2>📦 Estoque</h2>
-    <div class="stock-num"><span id="eOcup">-</span> / <span id="eTotal">-</span></div>
-    <div class="bar"><div id="eBar"></div></div>
-    <div class="muted" style="text-align:center">Ocupados / Capacidade total</div>
-
-    <div class="row">
-      <div><label for="inp_total">Capacidade</label><input type="number" id="inp_total" min="1" inputmode="numeric"></div>
-      <div><label for="inp_ocupados">Abastecidos</label><input type="number" id="inp_ocupados" min="0" placeholder="Ex: 7" inputmode="numeric"></div>
-    </div>
-    <button class="btn warn" onclick="atualizarEstoque()">🔄 Atualizar estoque</button>
-    <button class="btn" id="btnDispense" onclick="dispensar()">💊 Dispensar uma dose agora</button>
-  </section>
-
-  <!-- AGENDAR -->
-  <section class="card">
-    <h2>⏰ Agendar nova dose</h2>
-    <label for="modo">Tipo de agendamento</label>
-    <select id="modo" onchange="mudaModo()">
-      <option value="horario">Horário exato (ex: 18:15)</option>
-      <option value="cronometro">Cronômetro (daqui a X tempo)</option>
-      <option value="intervalo">Intervalo (a cada X horas)</option>
-    </select>
-
-    <div id="div_horario">
-      <label for="h_time">Hora</label>
-      <input type="time" id="h_time">
-      <label class="check"><input type="checkbox" id="h_diario"> Repetir todos os dias</label>
-    </div>
-    <div id="div_cronometro" class="hidden">
-      <div class="row">
-        <div><label for="c_horas">Horas</label><input type="number" id="c_horas" min="0" max="99" placeholder="0" inputmode="numeric"></div>
-        <div><label for="c_mins">Minutos</label><input type="number" id="c_mins" min="0" max="59" placeholder="0" inputmode="numeric"></div>
-      </div>
-    </div>
-    <div id="div_intervalo" class="hidden">
-      <label for="i_horas">Repetir a cada (horas)</label>
-      <input type="number" id="i_horas" min="1" max="99" placeholder="Ex: 8" inputmode="numeric">
-    </div>
-    <button class="btn ok" onclick="salvarAgendamento()">➕ Adicionar à lista</button>
-  </section>
-
-  <!-- LISTA -->
-  <section class="card full">
-    <h2>📋 Agendamentos ativos</h2>
-    <ul id="lista"><li class="empty">Carregando...</li></ul>
-    <button class="btn danger" id="btnLimpar" onclick="limparAgendamentos()">🗑️ Limpar todos</button>
-  </section>
-</main>
-
-<div id="toast" role="status"></div>
-
-<script>
-  const $ = id => document.getElementById(id);
-  let dados = { ocupados: 0, total: 0, agendamentos: [] };
-  let ultimaLeitura = Date.now();
-  let totalInicializado = false;
-
-  /* ---------- Tema ---------- */
-  function atualizaIconeTema() {
-    $('themeBtn').textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '☀️' : '🌙';
-  }
-  function toggleTheme() {
-    const novo = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', novo);
-    localStorage.setItem('elos-theme', novo);
-    atualizaIconeTema();
-  }
-  atualizaIconeTema();
-
-  /* ---------- Utilidades ---------- */
-  let toastTimer;
-  function aviso(msg) {
-    const t = $('toast'); t.textContent = msg; t.classList.add('show');
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
-  }
-  function fmt(s) {
-    s = Math.max(0, Math.floor(s));
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
-    return [h, m, x].map(n => String(n).padStart(2, '0')).join(':');
-  }
-
-  /* ---------- Comunicação com o ESP32 ---------- */
-  async function carregar() {
-    try {
-      const r = await fetch('/status', { cache: 'no-store' });
-      dados = await r.json();
-      ultimaLeitura = Date.now();
-      $('conn').classList.add('on');
-      if (!totalInicializado) { $('inp_total').value = dados.total; totalInicializado = true; }
-    } catch (e) {
-      $('conn').classList.remove('on');
-    }
-    desenhar();
-  }
-
-  /* ---------- Desenho da tela (roda a cada segundo, usando contagem local) ---------- */
-  function desenhar() {
-    const passou = (Date.now() - ultimaLeitura) / 1000;
-
-    // Estoque
-    $('eOcup').textContent = dados.ocupados;
-    $('eTotal').textContent = dados.total;
-    const pct = dados.total > 0 ? (dados.ocupados / dados.total) * 100 : 0;
-    const bar = $('eBar');
-    bar.style.width = pct + '%';
-    bar.style.background = pct <= 15 ? 'var(--danger)' : pct <= 40 ? 'var(--warn)' : 'var(--ok)';
-
-    // Lista com cronômetro regressivo
-    const ul = $('lista');
-    ul.innerHTML = '';
-    const itens = dados.agendamentos || [];
-    let menor = null;
-
-    if (itens.length === 0) {
-      const li = document.createElement('li');
-      li.className = 'empty'; li.textContent = 'Nenhum agendamento programado';
-      ul.appendChild(li);
-    }
-    itens.forEach(a => {
-      const resta = Math.max(0, a.restante - passou);
-      if (menor === null || resta < menor.resta) menor = { resta, desc: a.desc };
-
-      const li = document.createElement('li');
-      const info = document.createElement('div'); info.className = 'info';
-      const nome = document.createElement('strong'); nome.textContent = a.desc;
-      const sub = document.createElement('span'); sub.className = 'muted';
-      sub.textContent = a.repete > 0 ? 'Repete a cada ' + fmt(a.repete) : 'Dose única';
-      info.append(nome, sub);
-
-      const tempo = document.createElement('span'); tempo.className = 'time'; tempo.textContent = fmt(resta);
-
-      const del = document.createElement('button'); del.className = 'del'; del.textContent = '✕';
-      del.setAttribute('aria-label', 'Remover agendamento'); del.onclick = () => remover(a.id);
-
-      li.append(info, tempo, del);
-      ul.appendChild(li);
-    });
-
-    // Destaque da próxima dose
-    $('proxTempo').textContent = menor ? fmt(menor.resta) : '--:--:--';
-    $('proxDesc').textContent = menor ? menor.desc : 'Nenhum agendamento ativo';
-
-    // Se o tempo zerou, busca o novo estado da placa
-    if (menor && menor.resta <= 0 && Date.now() - ultimaLeitura > 2000) carregar();
-  }
-
-  setInterval(desenhar, 1000);
-  setInterval(carregar, 5000);
-  carregar();
-
-  /* ---------- Ações ---------- */
-  async function dispensar() {
-    try {
-      const txt = await (await fetch('/dispensar')).text();
-      aviso(txt === 'Vazio' ? '⚠️ A caixa está VAZIA!' : '💊 Dose liberada!');
-    } catch (e) { aviso('Erro ao conectar com a placa.'); }
-    carregar();
-  }
-
-  async function atualizarEstoque() {
-    const t = $('inp_total').value, o = $('inp_ocupados').value;
-    if (o === '' || t === '') return aviso('⚠️ Preencha os dois valores!');
-    try {
-      await fetch(`/estoque?total=${t}&ocupados=${o}`);
-      $('inp_ocupados').value = '';
-      aviso('✅ Estoque atualizado!');
-    } catch (e) { aviso('Erro ao conectar com a placa.'); }
-    carregar();
-  }
-
-  async function limparAgendamentos() {
-    if (!confirm('Deseja apagar todos os horários agendados?')) return;
-    try { await fetch('/limpar'); aviso('🗑️ Agendamentos apagados.'); } catch (e) { aviso('Erro ao conectar.'); }
-    carregar();
-  }
-
-  async function remover(id) {
-    try { await fetch('/remover?id=' + id); aviso('Agendamento removido.'); } catch (e) { aviso('Erro ao conectar.'); }
-    carregar();
-  }
-
-  function mudaModo() {
-    ['horario', 'cronometro', 'intervalo'].forEach(m => $('div_' + m).classList.add('hidden'));
-    $('div_' + $('modo').value).classList.remove('hidden');
-  }
-
-  async function salvarAgendamento() {
-    const modo = $('modo').value;
-    let delay = 0, repetir = 0, desc = '';
-
-    if (modo === 'horario') {
-      const t = $('h_time').value;
-      if (!t) return aviso('⚠️ Preencha o horário!');
-      const p = t.split(':');
-      const agora = new Date();
-      const alvo = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate(), +p[0], +p[1], 0);
-      if (alvo <= agora) alvo.setDate(alvo.getDate() + 1);
-      delay = Math.floor((alvo - agora) / 1000);
-      if ($('h_diario').checked) { repetir = 86400; desc = 'Todos os dias às ' + t; }
-      else desc = 'Às ' + t;
-    } else if (modo === 'cronometro') {
-      const h = parseInt($('c_horas').value || 0), m = parseInt($('c_mins').value || 0);
-      if (h === 0 && m === 0) return aviso('⚠️ Insira um tempo!');
-      delay = h * 3600 + m * 60;
-      desc = 'Daqui a ' + h + 'h ' + m + 'm';
-    } else {
-      const h = parseInt($('i_horas').value || 0);
-      if (h <= 0) return aviso('⚠️ Preencha as horas!');
-      delay = h * 3600; repetir = h * 3600;
-      desc = 'A cada ' + h + ' horas';
-    }
-
-    try {
-      const msg = await (await fetch(`/agendar?delay=${delay}&repetir=${repetir}&desc=${encodeURIComponent(desc)}`)).text();
-      aviso(msg === 'FULL' ? '⚠️ Limite máximo atingido!' : msg === 'OK' ? '✅ Dose adicionada!' : '⚠️ Configuração inválida.');
-    } catch (e) { aviso('Erro ao conectar com a placa.'); }
-    carregar();
-  }
-</script>
-</body>
-</html>
-)rawliteral";
-
-// ======================= HANDLERS =======================
-
-void handleRoot() {
-  server.send_P(200, "text/html", index_html);
-}
-
-void handleStatus() {
+// Monta e envia o JSON de status completo para o Aplicativo
+void enviarStatusBT() {
   int p = proximoAgendamento();
   String json = "{\"ocupados\":" + String(slotsOcupados) +
                 ",\"total\":" + String(capacidadeTotal) +
@@ -534,148 +291,294 @@ void handleStatus() {
     primeiro = false;
   }
   json += "]}";
-  server.send(200, "application/json", json);
+  enviarRespostaBT(json);
 }
 
-void handleEstoque() {
-  if (server.hasArg("total") && server.hasArg("ocupados")) {
-    int total = server.arg("total").toInt();
-    int ocup = server.arg("ocupados").toInt();
-    if (total < 1) total = 1;
-    if (ocup < 0) ocup = 0;
-    if (ocup > total) ocup = total;
-    capacidadeTotal = total;
-    slotsOcupados = ocup;
-
-    Serial.println("[SISTEMA] Estoque reabastecido!");
-    showMessage("Estoque:", String(slotsOcupados) + "/" + String(capacidadeTotal), 2000);
-    server.send(200, "text/plain", "OK");
-  } else {
-    server.send(400, "text/plain", "Faltam parametros");
-  }
-}
-
-void handleDispense() {
+// ============================================================================
+// DISPENSADOR
+// ============================================================================
+void acionarDispensador() {
   if (slotsOcupados > 0 && !emUso) {
-    acionarDispensador();
-    server.send(200, "text/plain", "OK");
-  } else {
+    emUso = true;
+    slotsOcupados--;
+    salvarEstoqueNaFlash();
+
+    updateDisplay("Liberando", "Remedio...");
+    myStepper.step(276); // 45 graus (1/8 de volta)
+    stopMotor();
+
+    // Notifica a pulseira (gancho pronto para implementação futura)
+    dadosPulseira.slotsRestantes = slotsOcupados;
+    notificarPulseira(1);
+
+    showMessage("Dose liberada", String(slotsOcupados) + "/" + String(capacidadeTotal), 2500);
+    emUso = false;
+  } else if (slotsOcupados <= 0) {
+    dadosPulseira.slotsRestantes = 0;
+    notificarPulseira(2);
     showMessage("ALERTA!", "Caixa Vazia!", 4000);
-    server.send(400, "text/plain", "Vazio");
   }
 }
 
-void handleLimpar() {
-  for (int i = 0; i < MAX_AGENDAMENTOS; i++) listaAgendamentos[i].ativo = false;
-  Serial.println("[SISTEMA] Todos os agendamentos foram apagados.");
-  server.send(200, "text/plain", "OK");
-}
+// ============================================================================
+// PROCESSADOR DE COMANDOS BLUETOOTH / SERIAL
+// Protocolo aceito pelo App (.apk):
+//   STATUS
+//   DISPENSAR
+//   ESTOQUE:<total>:<ocupados>          Ex: ESTOQUE:7:5
+//   AGENDAR:<delay>:<repetir>:<desc>    Ex: AGENDAR:28800:28800:A cada 8h
+//   REMOVER:<id>                        Ex: REMOVER:0
+//   LIMPAR
+// ============================================================================
+void processarComando(String cmd) {
+  cmd.trim();
+  if (cmd.length() == 0) return;
 
-void handleRemover() {
-  if (server.hasArg("id")) {
-    int id = server.arg("id").toInt();
+  Serial.println("[BT RX] Comando recebido: " + cmd);
+
+  if (cmd.equalsIgnoreCase("STATUS")) {
+    enviarStatusBT();
+    return;
+  }
+
+  if (cmd.equalsIgnoreCase("DISPENSAR")) {
+    if (slotsOcupados > 0 && !emUso) {
+      acionarDispensador();
+      enviarRespostaBT("{\"evento\":\"DISPENSADO\",\"ok\":true}");
+    } else {
+      showMessage("ALERTA!", "Caixa Vazia!", 4000);
+      enviarRespostaBT("{\"evento\":\"VAZIO\",\"ok\":false}");
+    }
+    enviarStatusBT();
+    return;
+  }
+
+  if (cmd.equalsIgnoreCase("LIMPAR")) {
+    for (int i = 0; i < MAX_AGENDAMENTOS; i++) listaAgendamentos[i].ativo = false;
+    showMessage("Agenda:", "Limpa!", 2000);
+    enviarStatusBT();
+    return;
+  }
+
+  if (cmd.startsWith("REMOVER:")) {
+    int id = cmd.substring(8).toInt();
     if (id >= 0 && id < MAX_AGENDAMENTOS) {
       listaAgendamentos[id].ativo = false;
-      server.send(200, "text/plain", "OK");
+    }
+    enviarStatusBT();
+    return;
+  }
+
+  if (cmd.startsWith("ESTOQUE:")) {
+    // Formato: ESTOQUE:<total>:<ocupados>
+    int p1 = cmd.indexOf(':');
+    int p2 = cmd.indexOf(':', p1 + 1);
+    if (p1 > 0 && p2 > p1) {
+      int total = cmd.substring(p1 + 1, p2).toInt();
+      int ocup = cmd.substring(p2 + 1).toInt();
+      if (total < 1) total = 1;
+      if (ocup < 0) ocup = 0;
+      if (ocup > total) ocup = total;
+      capacidadeTotal = total;
+      slotsOcupados = ocup;
+      salvarEstoqueNaFlash();
+      showMessage("Estoque:", String(slotsOcupados) + "/" + String(capacidadeTotal), 2000);
+    }
+    enviarStatusBT();
+    return;
+  }
+
+  if (cmd.startsWith("AGENDAR:")) {
+    // Formato: AGENDAR:<delaySegundos>:<repetirSegundos>:<descricao>
+    int p1 = cmd.indexOf(':');
+    int p2 = cmd.indexOf(':', p1 + 1);
+    int p3 = cmd.indexOf(':', p2 + 1);
+    if (p1 > 0 && p2 > p1 && p3 > p2) {
+      int slotLivre = -1;
+      for (int i = 0; i < MAX_AGENDAMENTOS; i++) {
+        if (!listaAgendamentos[i].ativo) { slotLivre = i; break; }
+      }
+      if (slotLivre == -1) {
+        enviarRespostaBT("{\"evento\":\"FULL\",\"ok\":false}");
+        return;
+      }
+
+      unsigned long delaySegundos = cmd.substring(p1 + 1, p2).toInt();
+      unsigned long repSegundos = cmd.substring(p2 + 1, p3).toInt();
+      String descricao = cmd.substring(p3 + 1);
+
+      if (delaySegundos == 0) {
+        enviarRespostaBT("{\"evento\":\"INVALIDO\",\"ok\":false}");
+        return;
+      }
+
+      descricao.replace("\"", "'");
+      descricao.replace("\\", "/");
+      if (descricao.length() > 40) descricao = descricao.substring(0, 40);
+
+      listaAgendamentos[slotLivre].alvoMillis = millis() + (delaySegundos * 1000UL);
+      listaAgendamentos[slotLivre].repeteMillis = repSegundos * 1000UL;
+      listaAgendamentos[slotLivre].descricao = descricao;
+      listaAgendamentos[slotLivre].ativo = true;
+
+      showMessage("Agendado:", descricao.length() > 10 ? descricao.substring(0, 10) : descricao, 2000);
+      enviarRespostaBT("{\"evento\":\"AGENDADO\",\"ok\":true}");
+      enviarStatusBT();
       return;
     }
   }
-  server.send(400, "text/plain", "ID invalido");
+
+  enviarRespostaBT("{\"evento\":\"COMANDO_DESCONHECIDO\",\"ok\":false}");
 }
 
-void handleAgendar() {
-  if (server.hasArg("delay") && server.hasArg("repetir") && server.hasArg("desc")) {
-    int slotLivre = -1;
-    for (int i = 0; i < MAX_AGENDAMENTOS; i++) {
-      if (!listaAgendamentos[i].ativo) { slotLivre = i; break; }
-    }
-    if (slotLivre == -1) {
-      server.send(200, "text/plain", "FULL");
-      return;
-    }
-
-    unsigned long delaySegundos = server.arg("delay").toInt();
-    unsigned long repSegundos = server.arg("repetir").toInt();
-    if (delaySegundos == 0) {
-      server.send(200, "text/plain", "INVALIDO");
-      return;
-    }
-
-    // Sanitiza a descrição para não quebrar o JSON
-    String descricao = server.arg("desc");
-    descricao.replace("\"", "'");
-    descricao.replace("\\", "/");
-    if (descricao.length() > 40) descricao = descricao.substring(0, 40);
-
-    listaAgendamentos[slotLivre].alvoMillis = millis() + (delaySegundos * 1000UL);
-    listaAgendamentos[slotLivre].repeteMillis = repSegundos * 1000UL;
-    listaAgendamentos[slotLivre].descricao = descricao;
-    listaAgendamentos[slotLivre].ativo = true;
-
-    showMessage("Agendado:", descricao.length() > 10 ? descricao.substring(0, 10) : descricao, 2000);
-    server.send(200, "text/plain", "OK");
-  } else {
-    server.send(400, "text/plain", "Faltam parametros");
+// ============================================================================
+// CALLBACKS DO BLUETOOTH LOW ENERGY (BLE)
+// ============================================================================
+#if !USAR_BLUETOOTH_CLASSICO
+class CallbacksServidorBLE : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) override {
+    bleConectado = true;
+    Serial.println("[BLE] Celular conectado!");
   }
+  void onDisconnect(BLEServer* pServer) override {
+    bleConectado = false;
+    Serial.println("[BLE] Celular desconectado. Reiniciando anuncio...");
+    pServer->startAdvertising();
+  }
+};
+
+class CallbacksRecepcaoBLE : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) override {
+    std::string rxValue = pCharacteristic->getValue();
+    if (rxValue.length() > 0) {
+      for (size_t i = 0; i < rxValue.length(); i++) {
+        char c = rxValue[i];
+        if (c == '\n' || c == '\r') {
+          if (filaComandoBLE.length() > 0) {
+            comandoBLERecebido = true;
+          }
+        } else {
+          filaComandoBLE += c;
+        }
+      }
+      // Caso o app envie sem '\n' no final, agenda processamento se terminar comando completo
+      if (!comandoBLERecebido && filaComandoBLE.length() > 0 &&
+          (filaComandoBLE.equalsIgnoreCase("STATUS") ||
+           filaComandoBLE.equalsIgnoreCase("DISPENSAR") ||
+           filaComandoBLE.equalsIgnoreCase("LIMPAR"))) {
+        comandoBLERecebido = true;
+      }
+    }
+  }
+};
+#endif
+
+void iniciarBluetooth() {
+#if USAR_BLUETOOTH_CLASSICO
+  SerialBT.begin(NOME_BLUETOOTH);
+  Serial.println("[BT] Bluetooth Classico SPP iniciado como: " NOME_BLUETOOTH);
+#else
+  BLEDevice::init(NOME_BLUETOOTH);
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new CallbacksServidorBLE());
+
+  BLEService* pService = pServer->createService(SERVICE_UUID);
+
+  pTxCharacteristic = pService->createCharacteristic(
+    CHARACTERISTIC_UUID_TX,
+    BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ
+  );
+  pTxCharacteristic->addDescriptor(new BLE2902());
+
+  BLECharacteristic* pRxCharacteristic = pService->createCharacteristic(
+    CHARACTERISTIC_UUID_RX,
+    BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
+  );
+  pRxCharacteristic->setCallbacks(new CallbacksRecepcaoBLE());
+
+  pService->start();
+
+  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);
+  BLEDevice::startAdvertising();
+
+  Serial.println("[BLE] Bluetooth Low Energy iniciado como: " NOME_BLUETOOTH);
+#endif
 }
 
-// ======================= SETUP / LOOP =======================
-
+// ============================================================================
+// SETUP E LOOP PRINCIPAL
+// ============================================================================
 void setup() {
   Serial.begin(115200);
-  delay(2000);
+  delay(1000);
 
   for (int i = 0; i < MAX_AGENDAMENTOS; i++) listaAgendamentos[i].ativo = false;
 
+  carregarEstoqueDaFlash();
   myStepper.setSpeed(12);
+  stopMotor();
 
   Wire.begin(OLED_SDA, OLED_SCL);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) Serial.println("Erro OLED");
-
-  updateDisplay("Conectando", "Wi-Fi...");
-  Serial.println("\n[SISTEMA] Conectando ao Wi-Fi...");
-
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.begin(ssidAP, passwordAP);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("[ERRO] Falha ao iniciar display OLED");
   }
 
-  Serial.println("");
-  Serial.print("[SISTEMA] Wi-Fi Conectado com sucesso!");
-  Serial.print("\n[SISTEMA] === ACESSE O PAINEL NO NAVEGADOR NESTE IP: ");
-  Serial.print(WiFi.localIP());
-  Serial.println(" ===");
+  updateDisplay("Iniciando", "Bluetooth...");
+  iniciarBluetooth();
+  iniciarComunicacaoPulseira();
 
-  // if (esp_now_init() == ESP_OK) {
-  //   esp_now_register_send_cb((esp_now_send_cb_t)OnDataSent);
-  //   memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-  //   peerInfo.channel = 0;
-  //   peerInfo.encrypt = false;
-  //   esp_now_add_peer(&peerInfo);
-  // }
-
-  server.on("/", handleRoot);
-  server.on("/status", handleStatus);
-  server.on("/dispensar", handleDispense);
-  server.on("/agendar", handleAgendar);
-  server.on("/remover", handleRemover);
-  server.on("/limpar", handleLimpar);
-  server.on("/estoque", handleEstoque);
-  server.begin();
-
-  stopMotor();
-  // Mostra o IP por alguns segundos e depois entra na tela principal
-  showMessage("Acesse o painel:", WiFi.localIP().toString(), 5000);
+  showMessage("Bluetooth OK:", NOME_BLUETOOTH, 3500);
+  Serial.println("[SISTEMA] Caixa inteligente pronta (100% Offline via Bluetooth)!");
 }
 
 void loop() {
-  server.handleClient();
+  // 1. Leitura de comandos vindos do Bluetooth
+#if USAR_BLUETOOTH_CLASSICO
+  while (SerialBT.available()) {
+    char c = (char)SerialBT.read();
+    if (c == '\n' || c == '\r') {
+      if (bufferSerial.length() > 0) {
+        processarComando(bufferSerial);
+        bufferSerial = "";
+      }
+    } else {
+      bufferSerial += c;
+    }
+  }
+#else
+  if (comandoBLERecebido) {
+    String cmd = filaComandoBLE;
+    filaComandoBLE = "";
+    comandoBLERecebido = false;
+    processarComando(cmd);
+  }
 
-  // --- Disparo dos agendamentos ---
+  // Envia o status automaticamente assim que o celular conecta
+  if (bleConectado && !bleConectadoAnterior) {
+    bleConectadoAnterior = true;
+    showMessage("Celular", "Conectado!", 2000);
+  } else if (!bleConectado && bleConectadoAnterior) {
+    bleConectadoAnterior = false;
+  }
+#endif
+
+  // 2. Também aceita os mesmos comandos via cabo USB (Monitor Serial) para facilitar testes!
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (bufferSerial.length() > 0) {
+        processarComando(bufferSerial);
+        bufferSerial = "";
+      }
+    } else {
+      bufferSerial += c;
+    }
+  }
+
+  // 3. Disparo automático dos agendamentos
   for (int i = 0; i < MAX_AGENDAMENTOS; i++) {
     if (listaAgendamentos[i].ativo && restanteMs(i) <= 0) {
       if (slotsOcupados > 0) {
@@ -685,14 +588,18 @@ void loop() {
         } else {
           listaAgendamentos[i].ativo = false;
         }
+        enviarStatusBT();
       } else {
+        dadosPulseira.slotsRestantes = 0;
+        notificarPulseira(2);
         showMessage("ALERTA!", "Sem Remedio", 4000);
         listaAgendamentos[i].ativo = false;
+        enviarStatusBT();
       }
     }
   }
 
-  // --- OLED: fim da mensagem temporária e atualização do cronômetro (1x por segundo) ---
+  // 4. Atualização do visor OLED (1x por segundo)
   if (msgAtiva && (long)(millis() - msgAte) >= 0) msgAtiva = false;
 
   if (!msgAtiva && millis() - ultimoRefresh >= 1000) {
