@@ -304,7 +304,7 @@ void acionarDispensador() {
     salvarEstoqueNaFlash();
 
     updateDisplay("Liberando", "Remedio...");
-    myStepper.step(276); // 45 graus (1/8 de volta)
+    myStepper.step(256); // 45 graus (1/8 de volta)
     stopMotor();
 
     // Notifica a pulseira (gancho pronto para implementação futura)
@@ -527,7 +527,7 @@ void setup() {
   for (int i = 0; i < MAX_AGENDAMENTOS; i++) listaAgendamentos[i].ativo = false;
 
   carregarEstoqueDaFlash();
-  myStepper.setSpeed(12);
+  myStepper.setSpeed(5);
   stopMotor();
 
   Wire.begin(OLED_SDA, OLED_SCL);

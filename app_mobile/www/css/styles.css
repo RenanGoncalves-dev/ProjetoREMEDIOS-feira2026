@@ -1,0 +1,355 @@
+/* ==========================================================================
+   E.L.O.S. Design System & Estilos Globais (Acessibilidade e Responsividade)
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+  --bg: #f1f5f9;
+  --surface: #ffffff;
+  --surface2: #f8fafc;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --primary: #2563eb;
+  --on-primary: #ffffff;
+  --soft: #dbeafe;
+  --ok: #16a34a;
+  --warn: #d97706;
+  --danger: #dc2626;
+  --shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b1220;
+  --surface: #131c2e;
+  --surface2: #1a2540;
+  --text: #e5e7eb;
+  --muted: #94a3b8;
+  --border: #263350;
+  --primary: #60a5fa;
+  --on-primary: #0b1220;
+  --soft: #1e3a5f;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.4;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  transition: background 0.25s, color 0.25s;
+}
+
+/* Cabeçalho Fixo */
+header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  font-size: 1.1rem;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  display: inline-block;
+}
+
+.dot.on {
+  background: var(--ok);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bt-btn {
+  border: 0;
+  background: var(--primary);
+  color: var(--on-primary);
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.bt-btn.connected {
+  background: var(--ok);
+  color: #ffffff;
+}
+
+.icon-btn {
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+
+/* Layout Principal */
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 800px) {
+  main {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+  .full {
+    grid-column: 1 / -1;
+  }
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.card h2 {
+  font-size: 1rem;
+  margin: 0 0 14px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Destaque da Próxima Dose */
+.hero {
+  text-align: center;
+  background: linear-gradient(135deg, var(--soft), var(--surface));
+}
+
+.countdown {
+  font-size: clamp(2.4rem, 12vw, 3.6rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary);
+  letter-spacing: 1px;
+  margin: 4px 0;
+}
+
+/* Indicador de Estoque */
+.stock-num {
+  font-size: 2.6rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.bar {
+  height: 12px;
+  border-radius: 99px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin: 8px 0 4px;
+}
+
+.bar > div {
+  height: 100%;
+  width: 0;
+  background: var(--ok);
+  transition: width 0.4s, background 0.4s;
+}
+
+/* Formulários e Botões Acessíveis (Alvo mínimo 48px para PCD) */
+label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin: 12px 0 6px;
+}
+
+input,
+select {
+  width: 100%;
+  padding: 12px;
+  font-size: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-weight: 500;
+}
+
+.check input {
+  width: 20px;
+  height: 20px;
+}
+
+.hidden {
+  display: none;
+}
+
+.btn {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 14px;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--on-primary);
+  background: var(--primary);
+}
+
+.btn:active {
+  transform: scale(0.98);
+  opacity: 0.85;
+}
+
+.btn.ok {
+  background: var(--ok);
+  color: #ffffff;
+}
+
+.btn.warn {
+  background: var(--warn);
+  color: #ffffff;
+}
+
+.btn.danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+/* Lista de Agendamentos */
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+li:last-child {
+  border-bottom: 0;
+}
+
+li .info {
+  flex: 1;
+  min-width: 0;
+}
+
+li .info strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+li .time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+li .del {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--danger);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.empty {
+  color: var(--muted);
+  font-style: italic;
+  justify-content: center;
+}
+
+/* Notificações Flutuantes (Toast) */
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  transform: translate(-50%, 30px);
+  background: var(--text);
+  color: var(--bg);
+  padding: 12px 18px;
+  border-radius: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transition: 0.3s;
+  max-width: 90vw;
+  text-align: center;
+  z-index: 20;
+}
+
+#toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
