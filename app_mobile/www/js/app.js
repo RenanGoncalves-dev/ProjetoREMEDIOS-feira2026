@@ -1,20 +1,28 @@
 /* ==========================================================================
-   Controlador Principal da Aplicação (Estado, Eventos e Regras de Negócio)
+   Controlador Principal da Aplicação (Estado, Eventos, Alarme e Regras)
    ========================================================================== */
 
 const ElosApp = (function () {
   let state = { ocupados: 0, total: 7, agendamentos: [] };
   let lastSyncTimestamp = Date.now();
   let isTotalInitialized = false;
+  let lastTriggeredScheduleKey = null;
 
   function handleIncomingPayload(line) {
     try {
       const json = JSON.parse(line);
       if (json.evento) {
-        if (json.evento === 'DISPENSADO') ElosUI.showToast('💊 Dose liberada!');
-        else if (json.evento === 'VAZIO') ElosUI.showToast('⚠️ A caixa está VAZIA!');
-        else if (json.evento === 'FULL') ElosUI.showToast('⚠️ Limite de 8 agendamentos atingido!');
-        else if (json.evento === 'AGENDADO') ElosUI.showToast('✅ Dose agendada com sucesso!');
+        if (json.evento === 'DISPENSADO') {
+          ElosUI.showToast('💊 Dose liberada na Caixa!');
+          ElosAlarm.triggerAlarm('Sua dose acabou de ser liberada na Caixa E.L.O.S.!');
+        } else if (json.evento === 'VAZIO') {
+          ElosUI.showToast('⚠️ A caixa está VAZIA! Abasteça os compartimentos.');
+          ElosAlarm.triggerAlarm('⚠️ ALERTA: Caixa de remédios vazia! Precisa reabastecer.');
+        } else if (json.evento === 'FULL') {
+          ElosUI.showToast('⚠️ Limite de 8 agendamentos atingido!');
+        } else if (json.evento === 'AGENDADO') {
+          ElosUI.showToast('✅ Horário agendado e alarme ativado no celular!');
+        }
         return;
       }
 
@@ -25,6 +33,8 @@ const ElosApp = (function () {
           ElosUI.$('inp_total').value = state.total;
           isTotalInitialized = true;
         }
+        // Sincroniza também os alarmes nativos do Android para tocar mesmo longe do Bluetooth
+        ElosAlarm.syncScheduledNotifications(state.agendamentos || []);
         tick();
       }
     } catch (e) {
@@ -38,14 +48,17 @@ const ElosApp = (function () {
       ElosBluetooth.sendCommand('REMOVER:' + id);
     });
 
-    // Quando o cronômetro regressivo zera, solicita atualização automática ao ESP32
-    if (
-      nearest &&
-      nearest.remaining <= 0 &&
-      Date.now() - lastSyncTimestamp > 2500 &&
-      ElosBluetooth.isConnected()
-    ) {
-      ElosBluetooth.sendCommand('STATUS');
+    // Quando o cronômetro regressivo atinge 00:00:00, dispara o Alarme no celular
+    // e sincroniza o estado com o ESP32
+    if (nearest && nearest.remaining <= 0) {
+      const triggerKey = `${nearest.id}_${lastSyncTimestamp}`;
+      if (lastTriggeredScheduleKey !== triggerKey) {
+        lastTriggeredScheduleKey = triggerKey;
+        ElosAlarm.triggerAlarm(nearest.desc);
+      }
+      if (Date.now() - lastSyncTimestamp > 2500 && ElosBluetooth.isConnected()) {
+        ElosBluetooth.sendCommand('STATUS');
+      }
     }
   }
 
@@ -57,7 +70,7 @@ const ElosApp = (function () {
     const total = ElosUI.$('inp_total').value;
     const ocupados = ElosUI.$('inp_ocupados').value;
     if (ocupados === '' || total === '') {
-      ElosUI.showToast('⚠️ Preencha os dois valores!');
+      ElosUI.showToast('⚠️ Preencha a capacidade e quantos remédios colocou!');
       return;
     }
     ElosBluetooth.sendCommand(`ESTOQUE:${total}:${ocupados}`).then((ok) => {
@@ -74,60 +87,62 @@ const ElosApp = (function () {
   }
 
   function saveSchedule() {
-    const mode = ElosUI.$('modo').value;
+    const form = ElosUI.getScheduleFormValues();
     let delay = 0;
     let repeat = 0;
-    let desc = '';
+    let timeText = '';
 
-    if (mode === 'horario') {
-      const timeVal = ElosUI.$('h_time').value;
-      if (!timeVal) {
-        ElosUI.showToast('⚠️ Preencha o horário!');
-        return;
-      }
-      const parts = timeVal.split(':');
+    if (form.mode === 'horario') {
+      const hh = String(form.clockHour).padStart(2, '0');
+      const mm = String(form.clockMin).padStart(2, '0');
       const now = new Date();
       const target = new Date(
         now.getFullYear(),
         now.getMonth(),
         now.getDate(),
-        +parts[0],
-        +parts[1],
+        form.clockHour,
+        form.clockMin,
         0
       );
       if (target <= now) target.setDate(target.getDate() + 1);
       delay = Math.floor((target - now) / 1000);
-      if (ElosUI.$('h_diario').checked) {
+      if (delay < 1) delay = 1;
+
+      if (form.repeatDaily) {
         repeat = 86400;
-        desc = 'Todos os dias às ' + timeVal;
+        timeText = `Diário às ${hh}:${mm}`;
       } else {
-        desc = 'Às ' + timeVal;
+        timeText = `Às ${hh}:${mm}`;
       }
-    } else if (mode === 'cronometro') {
-      const h = parseInt(ElosUI.$('c_horas').value || 0, 10);
-      const m = parseInt(ElosUI.$('c_mins').value || 0, 10);
-      if (h === 0 && m === 0) {
-        ElosUI.showToast('⚠️ Insira um tempo!');
-        return;
-      }
-      delay = h * 3600 + m * 60;
-      desc = 'Daqui a ' + h + 'h ' + m + 'm';
+    } else if (form.mode === 'intervalo') {
+      delay = form.intervalHours * 3600;
+      repeat = form.intervalHours * 3600;
+      timeText = `De ${form.intervalHours} em ${form.intervalHours}h`;
     } else {
-      const h = parseInt(ElosUI.$('i_horas').value || 0, 10);
-      if (h <= 0) {
-        ElosUI.showToast('⚠️ Preencha as horas!');
+      delay = form.timerHours * 3600 + form.timerMins * 60;
+      if (delay <= 0) {
+        ElosUI.showToast('⚠️ Escolha um tempo maior que zero!');
         return;
       }
-      delay = h * 3600;
-      repeat = h * 3600;
-      desc = 'A cada ' + h + ' horas';
+      timeText =
+        form.timerHours > 0
+          ? `Daqui a ${form.timerHours}h ${form.timerMins}m`
+          : `Daqui a ${form.timerMins} min`;
     }
 
-    ElosBluetooth.sendCommand(`AGENDAR:${delay}:${repeat}:${desc}`);
+    const finalDesc = form.medName ? `${form.medName} (${timeText})` : timeText;
+
+    ElosBluetooth.sendCommand(`AGENDAR:${delay}:${repeat}:${finalDesc}`).then((ok) => {
+      if (ok) {
+        ElosUI.clearMedicineName();
+      }
+    });
   }
 
   function init() {
     ElosUI.updateThemeIcon();
+    ElosUI.refreshClockDisplays();
+    ElosAlarm.init();
     ElosBluetooth.onMessage(handleIncomingPayload);
     ElosBluetooth.onConnectionChange((connected) => {
       ElosUI.setConnectionStatus(connected);
@@ -145,4 +160,3 @@ const ElosApp = (function () {
 })();
 
 document.addEventListener('DOMContentLoaded', ElosApp.init);
-

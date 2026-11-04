@@ -1,5 +1,5 @@
 /* ==========================================================================
-   E.L.O.S. Design System & Estilos Globais (Acessibilidade e Responsividade)
+   E.L.O.S. Design System & Estilos Globais (Acessibilidade PCD e TDAH)
    ========================================================================== */
 
 :root {
@@ -9,7 +9,7 @@
   --surface2: #f8fafc;
   --text: #0f172a;
   --muted: #64748b;
-  --border: #e2e8f0;
+  --border: #cbd5e1;
   --primary: #2563eb;
   --on-primary: #ffffff;
   --soft: #dbeafe;
@@ -24,20 +24,21 @@
   --bg: #0b1220;
   --surface: #131c2e;
   --surface2: #1a2540;
-  --text: #e5e7eb;
+  --text: #f1f5f9;
   --muted: #94a3b8;
-  --border: #263350;
+  --border: #2e3f63;
   --primary: #60a5fa;
   --on-primary: #0b1220;
   --soft: #1e3a5f;
-  --ok: #4ade80;
-  --warn: #fbbf24;
-  --danger: #f87171;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --danger: #ef4444;
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 
 * {
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
 }
 
 html {
@@ -49,7 +50,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  line-height: 1.4;
+  line-height: 1.45;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   transition: background 0.25s, color 0.25s;
 }
@@ -62,14 +63,14 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   padding: 12px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 
 header h1 {
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   margin: 0;
   display: flex;
   align-items: center;
@@ -77,15 +78,17 @@ header h1 {
 }
 
 .dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: var(--danger);
   display: inline-block;
+  flex-shrink: 0;
 }
 
 .dot.on {
   background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
 }
 
 .header-actions {
@@ -145,19 +148,19 @@ main {
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 18px;
   padding: 18px;
   box-shadow: var(--shadow);
 }
 
 .card h2 {
-  font-size: 1rem;
-  margin: 0 0 14px;
+  font-size: 1.05rem;
+  margin: 0 0 12px;
 }
 
 .muted {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 0.88rem;
 }
 
 /* Destaque da Próxima Dose */
@@ -167,8 +170,8 @@ main {
 }
 
 .countdown {
-  font-size: clamp(2.4rem, 12vw, 3.6rem);
-  font-weight: 700;
+  font-size: clamp(2.5rem, 12vw, 3.8rem);
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
   color: var(--primary);
   letter-spacing: 1px;
@@ -178,17 +181,17 @@ main {
 /* Indicador de Estoque */
 .stock-num {
   font-size: 2.6rem;
-  font-weight: 700;
+  font-weight: 800;
   text-align: center;
 }
 
 .bar {
-  height: 12px;
+  height: 14px;
   border-radius: 99px;
   background: var(--surface2);
   border: 1px solid var(--border);
   overflow: hidden;
-  margin: 8px 0 4px;
+  margin: 8px 0 6px;
 }
 
 .bar > div {
@@ -198,29 +201,205 @@ main {
   transition: width 0.4s, background 0.4s;
 }
 
-/* Formulários e Botões Acessíveis (Alvo mínimo 48px para PCD) */
-label {
-  display: block;
-  font-size: 0.85rem;
-  font-weight: 600;
-  margin: 12px 0 6px;
+/* ==========================================================================
+   NOVO CONFIGURADOR DE HORÁRIO ACESSÍVEL (PCD / TDAH)
+   ========================================================================== */
+
+.step-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 14px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-input,
-select {
+/* Abas Grandes de Escolha de Modo (Substitui o select pequeno) */
+.mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.mode-tab {
+  min-height: 54px;
+  border: 2px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  border-radius: 14px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 6px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  transition: 0.2s;
+}
+
+.mode-tab span.icon {
+  font-size: 1.25rem;
+}
+
+.mode-tab.active {
+  border-color: var(--primary);
+  background: var(--soft);
+  color: var(--primary);
+}
+
+/* Grade de Botões de Atalho Rápido (1 Toque - TDAH Friendly) */
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.preset-btn {
+  min-height: 50px;
+  border: 2px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  border-radius: 12px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 8px 10px;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: 0.15s;
+}
+
+.preset-btn:active,
+.preset-btn.selected {
+  border-color: var(--primary);
+  background: var(--soft);
+}
+
+.preset-btn small {
+  color: var(--primary);
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+
+/* Relógio Digital Gigante com Botões + e - (Fácil Controle Motor PCD) */
+.clock-box {
+  background: var(--surface2);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  margin: 10px 0;
+}
+
+.clock-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.clock-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  max-width: 130px;
+}
+
+.clock-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+}
+
+.step-btn {
   width: 100%;
+  min-height: 48px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--primary);
+  border-radius: 12px;
+  font-size: 1.15rem;
+  font-weight: 800;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step-btn:active {
+  background: var(--soft);
+  transform: scale(0.96);
+}
+
+.clock-digits {
+  font-size: 2.8rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1.1;
+  padding: 4px 0;
+}
+
+.clock-sep {
+  font-size: 2.6rem;
+  font-weight: 800;
+  color: var(--primary);
+  padding-top: 16px;
+}
+
+/* Botão de Repetição Diária tipo Card Tocável */
+.repeat-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface2);
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-top: 10px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.repeat-toggle input {
+  width: 24px;
+  height: 24px;
+  margin: 0;
+}
+
+/* Formulários e Botões Gerais */
+label {
+  display: block;
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin: 10px 0 6px;
+}
+
+input[type="text"],
+input[type="number"] {
+  width: 100%;
+  min-height: 48px;
   padding: 12px;
   font-size: 16px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
+  border-radius: 12px;
+  border: 2px solid var(--border);
   background: var(--surface2);
   color: var(--text);
 }
 
-input:focus,
-select:focus {
-  outline: 2px solid var(--primary);
-  outline-offset: 1px;
+input:focus {
+  outline: none;
+  border-color: var(--primary);
 }
 
 .row {
@@ -229,39 +408,30 @@ select:focus {
   gap: 10px;
 }
 
-.check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-  font-weight: 500;
-}
-
-.check input {
-  width: 20px;
-  height: 20px;
-}
-
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .btn {
   width: 100%;
-  min-height: 48px;
+  min-height: 54px;
   margin-top: 14px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 14px;
   cursor: pointer;
-  font-size: 1rem;
-  font-weight: 700;
+  font-size: 1.05rem;
+  font-weight: 800;
   color: var(--on-primary);
   background: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .btn:active {
   transform: scale(0.98);
-  opacity: 0.85;
+  opacity: 0.9;
 }
 
 .btn.ok {
@@ -290,7 +460,7 @@ li {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 0;
+  padding: 14px 0;
   border-bottom: 1px dashed var(--border);
 }
 
@@ -305,23 +475,26 @@ li .info {
 
 li .info strong {
   display: block;
+  font-size: 1rem;
   overflow-wrap: anywhere;
 }
 
 li .time {
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-size: 1.1rem;
+  font-weight: 800;
   color: var(--primary);
 }
 
 li .del {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  border: 2px solid var(--border);
   background: var(--surface2);
   color: var(--danger);
-  font-size: 1rem;
+  font-size: 1.1rem;
+  font-weight: 800;
   cursor: pointer;
 }
 
@@ -329,6 +502,96 @@ li .del {
   color: var(--muted);
   font-style: italic;
   justify-content: center;
+}
+
+/* ==========================================================================
+   MODAL DE ALARME EM TELA CHEIA (ALERTA VISUAL/SONORO PARA PCD & TDAH)
+   ========================================================================== */
+
+.alarm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(11, 18, 32, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: pulseBg 1.5s infinite alternate;
+}
+
+@keyframes pulseBg {
+  from {
+    background: rgba(11, 18, 32, 0.94);
+  }
+  to {
+    background: rgba(22, 163, 74, 0.88);
+  }
+}
+
+.alarm-box {
+  background: var(--surface);
+  border: 4px solid var(--ok);
+  border-radius: 24px;
+  padding: 28px 22px;
+  max-width: 440px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+
+.alarm-icon {
+  font-size: 4.2rem;
+  line-height: 1;
+  margin-bottom: 10px;
+  display: inline-block;
+  animation: bouncePill 0.7s infinite alternate;
+}
+
+@keyframes bouncePill {
+  from {
+    transform: translateY(0) scale(1);
+  }
+  to {
+    transform: translateY(-10px) scale(1.1);
+  }
+}
+
+.alarm-title {
+  font-size: 1.6rem;
+  font-weight: 900;
+  margin: 0 0 6px;
+  color: var(--ok);
+}
+
+.alarm-time {
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: var(--primary);
+  margin-bottom: 8px;
+}
+
+.alarm-desc {
+  font-size: 1.2rem;
+  font-weight: 700;
+  background: var(--surface2);
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  margin: 12px 0 20px;
+}
+
+.alarm-confirm-btn {
+  width: 100%;
+  min-height: 64px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--ok);
+  color: #ffffff;
+  font-size: 1.2rem;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(22, 163, 74, 0.4);
 }
 
 /* Notificações Flutuantes (Toast) */
@@ -339,18 +602,18 @@ li .del {
   transform: translate(-50%, 30px);
   background: var(--text);
   color: var(--bg);
-  padding: 12px 18px;
-  border-radius: 12px;
+  padding: 14px 20px;
+  border-radius: 14px;
+  font-weight: 700;
   opacity: 0;
   pointer-events: none;
   transition: 0.3s;
-  max-width: 90vw;
+  max-width: 92vw;
   text-align: center;
-  z-index: 20;
+  z-index: 50;
 }
 
 #toast.show {
   opacity: 1;
   transform: translate(-50%, 0);
 }
-

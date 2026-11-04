@@ -1,10 +1,18 @@
 /* ==========================================================================
-   Camada de Interface de Usuário (UI) — DOM, Temas e Componentes Visuais
+   Camada de Interface de Usuário (UI) — DOM, Relógio Acessível PCD/TDAH e Temas
    ========================================================================== */
 
 const ElosUI = (function () {
   const $ = (id) => document.getElementById(id);
   let toastTimer = null;
+
+  // Estado interno do Seletor de Horário Acessível
+  let activeMode = 'horario'; // 'horario' | 'intervalo' | 'cronometro'
+  let clockHour = 8;
+  let clockMin = 0;
+  let intervalHours = 8;
+  let timerHours = 0;
+  let timerMins = 15;
 
   function updateThemeIcon() {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -12,7 +20,8 @@ const ElosUI = (function () {
   }
 
   function toggleTheme() {
-    const nextTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    const nextTheme =
+      document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', nextTheme);
     localStorage.setItem('elos-theme', nextTheme);
     updateThemeIcon();
@@ -48,11 +57,82 @@ const ElosUI = (function () {
     }
   }
 
-  function switchScheduleMode() {
-    const selected = $('modo').value;
-    ['horario', 'cronometro', 'intervalo'].forEach((m) => {
-      $('div_' + m).classList.toggle('hidden', m !== selected);
+  /* ---------- Controles do Novo Seletor Acessível ---------- */
+  function refreshClockDisplays() {
+    $('disp_hora').textContent = String(clockHour).padStart(2, '0');
+    $('disp_min').textContent = String(clockMin).padStart(2, '0');
+    $('disp_intervalo').textContent = String(intervalHours) + 'h';
+    $('disp_c_hora').textContent = String(timerHours).padStart(2, '0');
+    $('disp_c_min').textContent = String(timerMins).padStart(2, '0');
+  }
+
+  function selectMode(mode) {
+    activeMode = mode;
+    ['horario', 'intervalo', 'cronometro'].forEach((m) => {
+      $('div_' + m).classList.toggle('hidden', m !== mode);
+      $('tab_' + m).classList.toggle('active', m === mode);
     });
+  }
+
+  function stepClock(deltaH, deltaM) {
+    clockHour = (clockHour + deltaH + 24) % 24;
+    clockMin = (clockMin + deltaM + 60) % 60;
+    refreshClockDisplays();
+  }
+
+  function setClockPreset(h, m, labelSugerido) {
+    clockHour = h;
+    clockMin = m;
+    const inpNome = $('inp_nome_remedio');
+    if (inpNome && !inpNome.value.trim()) {
+      inpNome.placeholder = 'Ex: Dose da ' + labelSugerido;
+    }
+    refreshClockDisplays();
+    showToast(`🕒 Horário ajustado para ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+  }
+
+  function stepInterval(deltaH) {
+    intervalHours = Math.max(1, Math.min(48, intervalHours + deltaH));
+    refreshClockDisplays();
+  }
+
+  function setIntervalPreset(h) {
+    intervalHours = h;
+    refreshClockDisplays();
+    showToast(`🔁 Intervalo de ${h} em ${h} horas selecionado`);
+  }
+
+  function stepTimer(deltaH, deltaM) {
+    timerHours = Math.max(0, Math.min(99, timerHours + deltaH));
+    timerMins = (timerMins + deltaM + 60) % 60;
+    if (timerHours === 0 && timerMins === 0) timerMins = 1;
+    refreshClockDisplays();
+  }
+
+  function setTimerPreset(h, m) {
+    timerHours = h;
+    timerMins = m;
+    refreshClockDisplays();
+    showToast(`⏳ Cronômetro ajustado para ${h > 0 ? h + 'h ' : ''}${m} min`);
+  }
+
+  function getScheduleFormValues() {
+    const medName = ($('inp_nome_remedio').value || '').trim();
+    const repeatDaily = $('h_diario').checked;
+    return {
+      mode: activeMode,
+      medName,
+      clockHour,
+      clockMin,
+      repeatDaily,
+      intervalHours,
+      timerHours,
+      timerMins
+    };
+  }
+
+  function clearMedicineName() {
+    $('inp_nome_remedio').value = '';
   }
 
   function renderDashboard(state, elapsedSeconds, onRemoveSchedule) {
@@ -81,7 +161,7 @@ const ElosUI = (function () {
     items.forEach((item) => {
       const remaining = Math.max(0, item.restante - elapsedSeconds);
       if (nearest === null || remaining < nearest.remaining) {
-        nearest = { remaining, desc: item.desc };
+        nearest = { id: item.id, remaining, desc: item.desc };
       }
 
       const li = document.createElement('li');
@@ -90,12 +170,12 @@ const ElosUI = (function () {
       info.className = 'info';
 
       const title = document.createElement('strong');
-      title.textContent = item.desc;
+      title.textContent = '💊 ' + item.desc;
 
       const sub = document.createElement('span');
       sub.className = 'muted';
       sub.textContent =
-        item.repete > 0 ? 'Repete a cada ' + formatDuration(item.repete) : 'Dose única';
+        item.repete > 0 ? '🔁 Repete a cada ' + formatDuration(item.repete) : '1️⃣ Dose única';
 
       info.append(title, sub);
 
@@ -114,7 +194,7 @@ const ElosUI = (function () {
     });
 
     $('proxTempo').textContent = nearest ? formatDuration(nearest.remaining) : '--:--:--';
-    $('proxDesc').textContent = nearest ? nearest.desc : 'Nenhum agendamento ativo';
+    $('proxDesc').textContent = nearest ? '💊 ' + nearest.desc : 'Nenhum agendamento ativo';
 
     return nearest;
   }
@@ -125,8 +205,16 @@ const ElosUI = (function () {
     toggleTheme,
     showToast,
     setConnectionStatus,
-    switchScheduleMode,
+    refreshClockDisplays,
+    selectMode,
+    stepClock,
+    setClockPreset,
+    stepInterval,
+    setIntervalPreset,
+    stepTimer,
+    setTimerPreset,
+    getScheduleFormValues,
+    clearMedicineName,
     renderDashboard
   };
 })();
-
