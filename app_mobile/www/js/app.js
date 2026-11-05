@@ -10,7 +10,6 @@ const ElosApp = (function () {
   let lastAlarmTriggerMs = 0;
 
   function triggerSafeAlarm(desc, titulo) {
-    // Evita disparo duplicado no mesmo segundo (ex: cronômetro local + evento BT simultâneos)
     if (Date.now() - lastAlarmTriggerMs < 3500) return;
     lastAlarmTriggerMs = Date.now();
     ElosAlarm.triggerAlarm(desc, titulo);
@@ -21,31 +20,35 @@ const ElosApp = (function () {
       const json = JSON.parse(line);
       if (json.evento) {
         if (json.evento === 'DISPENSADO') {
-          const msgDose = json.desc || 'Sua dose foi liberada na Caixa E.L.O.S.!';
-          ElosUI.showToast('💊 ' + msgDose);
-          triggerSafeAlarm(msgDose, '💊 HORA DO REMÉDIO! (E.L.O.S.)');
+          const msgDose = json.desc || 'Dose liberada na Caixa E.L.O.S.';
+          ElosUI.showToast('Dose liberada: ' + msgDose);
+          triggerSafeAlarm(msgDose, 'Hora do Remédio — E.L.O.S.');
         } else if (json.evento === 'DISPENSADO_RFID') {
-          const uidInfo = json.uid ? ` [Cartão: ${json.uid}]` : '';
-          ElosUI.showToast(`💳 Dose de emergência liberada via RFID${uidInfo}`);
-          // Toca o alarme no celular APENAS se o usuário ativou a chave de controle RFID no App!
+          const uidInfo = json.uid ? ` (UID: ${json.uid})` : '';
+          ElosUI.updateRfidStatus(json.uid || '', 'Dose de emergência liberada');
+          ElosUI.showToast(`Dose liberada via Tag RFID${uidInfo}`);
+          // Toca o alarme no celular APENAS se o usuário ativou a opção na aba Tag RFID
           if (ElosAlarm.shouldRingOnRfid()) {
             triggerSafeAlarm(
-              `Dose de emergência liberada pelo Cuidador via Cartão RFID${uidInfo}.`,
-              '💳 LIBERAÇÃO DE EMERGÊNCIA (RFID)'
+              `Dose de emergência liberada via Tag RFID${uidInfo}.`,
+              'Liberação via Tag RFID — E.L.O.S.'
             );
           }
         } else if (json.evento === 'VAZIO' || json.evento === 'VAZIO_RFID') {
-          ElosUI.showToast('⚠️ A caixa está VAZIA! Abasteça os compartimentos.');
+          if (json.evento === 'VAZIO_RFID') {
+            ElosUI.updateRfidStatus(json.uid || '', 'Tentativa com caixa vazia');
+          }
+          ElosUI.showToast('Caixa vazia. Abasteça os compartimentos.');
           if (json.evento === 'VAZIO' || ElosAlarm.shouldRingOnRfid()) {
             triggerSafeAlarm(
-              '⚠️ ALERTA: Tentativa de liberar dose, mas a Caixa está VAZIA!',
-              '⚠️ CAIXA DE REMÉDIOS VAZIA!'
+              'Tentativa de liberação de dose, porém a caixa está sem medicamentos.',
+              'Alerta: Caixa Vazia — E.L.O.S.'
             );
           }
         } else if (json.evento === 'FULL') {
-          ElosUI.showToast('⚠️ Limite de 8 agendamentos atingido!');
+          ElosUI.showToast('Limite de 8 agendamentos atingido.');
         } else if (json.evento === 'AGENDADO') {
-          ElosUI.showToast('✅ Horário agendado e alarme configurado no celular!');
+          ElosUI.showToast('Horário salvo e sincronizado.');
         }
         return;
       }
@@ -57,7 +60,6 @@ const ElosApp = (function () {
           ElosUI.$('inp_total').value = state.total;
           isTotalInitialized = true;
         }
-        // Sincroniza os horários com o agendador nativo do Android (para tocar fora do app!)
         ElosAlarm.syncScheduledNotifications(state.agendamentos || []);
         tick();
       }
@@ -72,13 +74,11 @@ const ElosApp = (function () {
       ElosBluetooth.sendCommand('REMOVER:' + id);
     });
 
-    // Quando o cronômetro regressivo de um agendamento programado atinge 00:00:00,
-    // dispara a notificação + toque do celular e sincroniza com o ESP32
     if (nearest && nearest.remaining <= 0) {
       const triggerKey = `${nearest.id}_${lastSyncTimestamp}`;
       if (lastTriggeredScheduleKey !== triggerKey) {
         lastTriggeredScheduleKey = triggerKey;
-        triggerSafeAlarm(nearest.desc, '💊 HORA DO REMÉDIO! (E.L.O.S.)');
+        triggerSafeAlarm(nearest.desc, 'Hora do Remédio — E.L.O.S.');
       }
       if (Date.now() - lastSyncTimestamp > 2500 && ElosBluetooth.isConnected()) {
         ElosBluetooth.sendCommand('STATUS');
@@ -94,19 +94,19 @@ const ElosApp = (function () {
     const total = ElosUI.$('inp_total').value;
     const ocupados = ElosUI.$('inp_ocupados').value;
     if (ocupados === '' || total === '') {
-      ElosUI.showToast('⚠️ Preencha a capacidade e quantos remédios colocou!');
+      ElosUI.showToast('Informe a capacidade total e as doses abastecidas.');
       return;
     }
     ElosBluetooth.sendCommand(`ESTOQUE:${total}:${ocupados}`).then((ok) => {
       if (ok) {
         ElosUI.$('inp_ocupados').value = '';
-        ElosUI.showToast('✅ Estoque atualizado!');
+        ElosUI.showToast('Estoque atualizado.');
       }
     });
   }
 
   function clearSchedules() {
-    if (!confirm('Deseja apagar todos os horários agendados?')) return;
+    if (!confirm('Deseja remover todos os horários agendados?')) return;
     ElosBluetooth.sendCommand('LIMPAR');
   }
 
@@ -141,17 +141,17 @@ const ElosApp = (function () {
     } else if (form.mode === 'intervalo') {
       delay = form.intervalHours * 3600;
       repeat = form.intervalHours * 3600;
-      timeText = `De ${form.intervalHours} em ${form.intervalHours}h`;
+      timeText = `A cada ${form.intervalHours}h`;
     } else {
       delay = form.timerHours * 3600 + form.timerMins * 60;
       if (delay <= 0) {
-        ElosUI.showToast('⚠️ Escolha um tempo maior que zero!');
+        ElosUI.showToast('Selecione um tempo maior que zero.');
         return;
       }
       timeText =
         form.timerHours > 0
-          ? `Daqui a ${form.timerHours}h ${form.timerMins}m`
-          : `Daqui a ${form.timerMins} min`;
+          ? `Em ${form.timerHours}h ${form.timerMins}m`
+          : `Em ${form.timerMins} min`;
     }
 
     const finalDesc = form.medName ? `${form.medName} (${timeText})` : timeText;

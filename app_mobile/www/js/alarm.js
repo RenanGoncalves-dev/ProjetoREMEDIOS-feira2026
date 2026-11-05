@@ -33,7 +33,6 @@ const ElosAlarm = (function () {
   }
 
   async function init() {
-    // Sincroniza o checkbox do RFID e abas de som na interface
     const chkRfid = document.getElementById('chk_alarme_rfid');
     if (chkRfid) chkRfid.checked = ringOnRfid;
 
@@ -41,7 +40,6 @@ const ElosAlarm = (function () {
     updateSelectedToneLabel();
     loadPhoneTones();
 
-    // Callback quando o usuário escolhe um toque pela janela nativa do sistema Android
     window.onNativeRingtonePicked = function (uri, title) {
       selectTone(uri, title, true);
     };
@@ -69,8 +67,8 @@ const ElosAlarm = (function () {
     localStorage.setItem('elos-ring-rfid', ringOnRfid ? 'true' : 'false');
     ElosUI.showToast(
       ringOnRfid
-        ? '🔔 Alarme ativado também para liberações via Cartão RFID'
-        : '🔕 Liberação por Cartão RFID ficará silenciosa no celular'
+        ? 'Alarme ativado para liberações via Tag RFID'
+        : 'Liberação via Tag RFID silenciosa no celular'
     );
   }
 
@@ -97,7 +95,7 @@ const ElosAlarm = (function () {
     const el = document.getElementById('lbl_toque_atual');
     if (el) {
       const tipoTxt =
-        soundCategory === 'chamada' ? '📞 Toque de Chamada' : '💬 Som de Mensagem';
+        soundCategory === 'chamada' ? 'Toque de Chamada' : 'Som de Mensagem';
       el.textContent = `${selectedToneTitle} (${tipoTxt})`;
     }
   }
@@ -116,12 +114,11 @@ const ElosAlarm = (function () {
       }
     }
 
-    // Sempre inclui a opção Padrão do Sistema no topo
     phoneTonesList.unshift({
       title:
         soundCategory === 'chamada'
-          ? '⭐ Toque de Chamada Padrão do Celular'
-          : '⭐ Som de Notificação Padrão do Celular',
+          ? 'Padrão do Sistema (Toque de Chamada)'
+          : 'Padrão do Sistema (Som de Notificação)',
       uri: ''
     });
 
@@ -145,29 +142,33 @@ const ElosAlarm = (function () {
     if (filtrados.length === 0) {
       const li = document.createElement('li');
       li.className = 'empty';
-      li.textContent = 'Nenhum toque encontrado com esse nome';
+      li.textContent = 'Nenhum toque encontrado para a pesquisa';
       ul.appendChild(li);
       return;
     }
 
     filtrados.forEach((item) => {
+      const isSelected = item.uri === selectedToneUri;
       const li = document.createElement('li');
-      li.className = 'tone-item' + (item.uri === selectedToneUri ? ' active' : '');
+      li.className = 'tone-item' + (isSelected ? ' active' : '');
 
       const btnSelect = document.createElement('button');
       btnSelect.type = 'button';
       btnSelect.className = 'tone-select-btn';
-      btnSelect.innerHTML =
-        (item.uri === selectedToneUri ? '🟢 ' : '🎵 ') +
-        '<span>' +
-        item.title +
-        '</span>';
+
+      const radioDot = document.createElement('span');
+      radioDot.className = 'tone-radio';
+
+      const labelSpan = document.createElement('span');
+      labelSpan.textContent = item.title;
+
+      btnSelect.append(radioDot, labelSpan);
       btnSelect.onclick = () => selectTone(item.uri, item.title, true);
 
       const btnPlay = document.createElement('button');
       btnPlay.type = 'button';
       btnPlay.className = 'tone-play-btn';
-      btnPlay.textContent = '▶️ Ouvir';
+      btnPlay.textContent = 'Ouvir';
       btnPlay.onclick = (e) => {
         e.stopPropagation();
         selectTone(item.uri, item.title, true);
@@ -196,7 +197,7 @@ const ElosAlarm = (function () {
       stopPreview();
       window.ElosNative.abrirSeletorDoSistema(soundCategory);
     } else {
-      ElosUI.showToast('ℹ️ Seletor nativo disponível dentro do APK instalado no Android.');
+      ElosUI.showToast('Seletor nativo disponível no aplicativo Android instalado.');
     }
   }
 
@@ -226,7 +227,6 @@ const ElosAlarm = (function () {
     }
   }
 
-  // Fallback sonoro caso aberto em navegador web comum
   function playWebFallbackBeep() {
     try {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -252,7 +252,6 @@ const ElosAlarm = (function () {
     } catch (_) {}
   }
 
-  // Sincroniza os horários programados com o agendador nativo do Android (para tocar fora do app!)
   async function syncScheduledNotifications(agendamentos) {
     const isCallMode = soundCategory === 'chamada';
 
@@ -264,8 +263,8 @@ const ElosAlarm = (function () {
             window.ElosNative.agendarNotificacaoEmSegundos(
               100 + idx,
               Math.floor(a.restante),
-              '💊 Hora do Remédio! (E.L.O.S.)',
-              `Dose liberada: ${a.desc}. Retire seu medicamento na caixa!`,
+              'Hora do Remédio — E.L.O.S.',
+              `Dose liberada: ${a.desc}. Retire seu medicamento na caixa.`,
               selectedToneUri,
               isCallMode
             );
@@ -286,8 +285,8 @@ const ElosAlarm = (function () {
           .filter((a) => a.restante > 2)
           .map((a, idx) => ({
             id: 100 + idx,
-            title: '💊 Hora do Remédio! (E.L.O.S.)',
-            body: `Dose liberada: ${a.desc}. Retire seu medicamento na caixa!`,
+            title: 'Hora do Remédio — E.L.O.S.',
+            body: `Dose liberada: ${a.desc}. Retire seu medicamento na caixa.`,
             channelId: CHANNEL_ID,
             schedule: { at: new Date(Date.now() + a.restante * 1000), allowWhileIdle: true }
           }));
@@ -299,14 +298,12 @@ const ElosAlarm = (function () {
     }
   }
 
-  // Dispara a Notificação Fora do App + Toque Pré-instalado do Celular + Vibração + Modal
   function triggerAlarm(descricaoDose, tituloPersonalizado) {
     stopPreview();
-    const titulo = tituloPersonalizado || '💊 HORA DO REMÉDIO! (E.L.O.S.)';
-    const desc = descricaoDose || 'Sua dose foi liberada na Caixa E.L.O.S.!';
+    const titulo = tituloPersonalizado || 'Hora do Remédio — E.L.O.S.';
+    const desc = descricaoDose || 'Dose liberada na Caixa E.L.O.S.';
     const isCallMode = soundCategory === 'chamada';
 
-    // 1. Dispara Notificação Real do Sistema Android (aparece fora do app) + Toca o Toque do Celular + Vibra
     if (hasNativeBridge()) {
       try {
         window.ElosNative.dispararAlertaNativo(titulo, desc, selectedToneUri, isCallMode);
@@ -320,7 +317,6 @@ const ElosAlarm = (function () {
       }
     }
 
-    // 2. Exibe o Modal de Alerta Visual para Foco (TDAH / PCD)
     const modal = document.getElementById('alarmModal');
     const modalDesc = document.getElementById('alarmModalDesc');
     const modalTime = document.getElementById('alarmModalTime');

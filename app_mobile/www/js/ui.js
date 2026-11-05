@@ -1,12 +1,15 @@
 /* ==========================================================================
-   Camada de Interface de Usuário (UI) — DOM, Relógio Acessível PCD/TDAH e Temas
+   Camada de Interface de Usuário (UI) — Navegação em Abas, Relógio e Estado Visual
    ========================================================================== */
 
 const ElosUI = (function () {
   const $ = (id) => document.getElementById(id);
   let toastTimer = null;
 
-  // Estado interno do Seletor de Horário Acessível
+  // Aba principal ativa ('agendamento' | 'rfid' | 'notificacoes')
+  let activeMainTab = 'agendamento';
+
+  // Estado interno do Seletor de Horário
   let activeMode = 'horario'; // 'horario' | 'intervalo' | 'cronometro'
   let clockHour = 8;
   let clockMin = 0;
@@ -16,7 +19,8 @@ const ElosUI = (function () {
 
   function updateThemeIcon() {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    $('themeBtn').textContent = isDark ? '☀️' : '🌙';
+    const btn = $('themeBtn');
+    if (btn) btn.textContent = isDark ? 'Claro' : 'Escuro';
   }
 
   function toggleTheme() {
@@ -27,8 +31,30 @@ const ElosUI = (function () {
     updateThemeIcon();
   }
 
+  function selectMainTab(tabName) {
+    activeMainTab = tabName;
+    ['agendamento', 'rfid', 'notificacoes'].forEach((t) => {
+      const navBtn = $('nav_' + t);
+      const pane = $('pane_' + t);
+      const isSelected = t === tabName;
+      if (navBtn) {
+        navBtn.classList.toggle('active', isSelected);
+        navBtn.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      }
+      if (pane) {
+        pane.classList.toggle('active', isSelected);
+      }
+    });
+
+    // Para pré-visualização sonora ao sair da aba de notificações
+    if (tabName !== 'notificacoes' && typeof ElosAlarm !== 'undefined') {
+      ElosAlarm.stopPreview();
+    }
+  }
+
   function showToast(msg) {
     const toast = $('toast');
+    if (!toast) return;
     toast.textContent = msg;
     toast.classList.add('show');
     clearTimeout(toastTimer);
@@ -44,20 +70,46 @@ const ElosUI = (function () {
   }
 
   function setConnectionStatus(connected) {
+    const connDot = $('conn');
+    const connText = $('connText');
+    const btBtn = $('btBtn');
+
     if (connected) {
-      $('conn').classList.add('on');
-      $('btBtn').textContent = '🟢 Conectado';
-      $('btBtn').classList.add('connected');
-      showToast('✅ Conectado à ELOS_Caixa!');
+      if (connDot) connDot.classList.add('on');
+      if (connText) connText.textContent = 'Conectado via BLE';
+      if (btBtn) {
+        btBtn.textContent = 'Conectado';
+        btBtn.classList.add('connected');
+      }
+      showToast('Conectado à caixa E.L.O.S.');
     } else {
-      $('conn').classList.remove('on');
-      $('btBtn').textContent = '🔵 Conectar Caixa';
-      $('btBtn').classList.remove('connected');
-      showToast('🔴 Caixa desconectada.');
+      if (connDot) connDot.classList.remove('on');
+      if (connText) connText.textContent = 'Desconectado';
+      if (btBtn) {
+        btBtn.textContent = 'Conectar Caixa';
+        btBtn.classList.remove('connected');
+      }
+      showToast('Caixa desconectada.');
     }
   }
 
-  /* ---------- Controles do Novo Seletor Acessível ---------- */
+  function updateRfidStatus(uid, statusMsg) {
+    const uidEl = $('rfid_last_uid');
+    const timeEl = $('rfid_last_time');
+    const nowStr = new Date().toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+    if (uidEl) {
+      uidEl.textContent = uid ? `Cartão lido: UID ${uid}` : 'Acionamento via RFID';
+    }
+    if (timeEl) {
+      timeEl.textContent = `${statusMsg || 'Dose liberada'} às ${nowStr}`;
+    }
+  }
+
+  /* ---------- Controles do Seletor de Horário ---------- */
   function refreshClockDisplays() {
     $('disp_hora').textContent = String(clockHour).padStart(2, '0');
     $('disp_min').textContent = String(clockMin).padStart(2, '0');
@@ -88,7 +140,7 @@ const ElosUI = (function () {
       inpNome.placeholder = 'Ex: Dose da ' + labelSugerido;
     }
     refreshClockDisplays();
-    showToast(`🕒 Horário ajustado para ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    showToast(`Horário definido para ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
   }
 
   function stepInterval(deltaH) {
@@ -99,7 +151,7 @@ const ElosUI = (function () {
   function setIntervalPreset(h) {
     intervalHours = h;
     refreshClockDisplays();
-    showToast(`🔁 Intervalo de ${h} em ${h} horas selecionado`);
+    showToast(`Intervalo de ${h} em ${h} horas selecionado`);
   }
 
   function stepTimer(deltaH, deltaM) {
@@ -113,7 +165,7 @@ const ElosUI = (function () {
     timerHours = h;
     timerMins = m;
     refreshClockDisplays();
-    showToast(`⏳ Cronômetro ajustado para ${h > 0 ? h + 'h ' : ''}${m} min`);
+    showToast(`Cronômetro ajustado para ${h > 0 ? h + 'h ' : ''}${m} min`);
   }
 
   function getScheduleFormValues() {
@@ -145,16 +197,19 @@ const ElosUI = (function () {
     bar.style.background =
       pct <= 15 ? 'var(--danger)' : pct <= 40 ? 'var(--warn)' : 'var(--ok)';
 
-    // 2. Lista de Agendamentos e Próxima Dose
+    // 2. Lista de Agendamentos e Contador na Aba
     const ul = $('lista');
     ul.innerHTML = '';
     const items = state.agendamentos || [];
+    const badge = $('badge_agendamentos');
+    if (badge) badge.textContent = String(items.length);
+
     let nearest = null;
 
     if (items.length === 0) {
       const li = document.createElement('li');
       li.className = 'empty';
-      li.textContent = 'Nenhum agendamento programado';
+      li.textContent = 'Nenhum horário programado';
       ul.appendChild(li);
     }
 
@@ -165,17 +220,18 @@ const ElosUI = (function () {
       }
 
       const li = document.createElement('li');
+      li.className = 'schedule-item';
 
       const info = document.createElement('div');
       info.className = 'info';
 
       const title = document.createElement('strong');
-      title.textContent = '💊 ' + item.desc;
+      title.textContent = item.desc;
 
       const sub = document.createElement('span');
       sub.className = 'muted';
       sub.textContent =
-        item.repete > 0 ? '🔁 Repete a cada ' + formatDuration(item.repete) : '1️⃣ Dose única';
+        item.repete > 0 ? 'Repete a cada ' + formatDuration(item.repete) : 'Dose única';
 
       info.append(title, sub);
 
@@ -185,7 +241,7 @@ const ElosUI = (function () {
 
       const delBtn = document.createElement('button');
       delBtn.className = 'del';
-      delBtn.textContent = '✕';
+      delBtn.textContent = 'Remover';
       delBtn.setAttribute('aria-label', 'Remover agendamento');
       delBtn.onclick = () => onRemoveSchedule(item.id);
 
@@ -194,7 +250,7 @@ const ElosUI = (function () {
     });
 
     $('proxTempo').textContent = nearest ? formatDuration(nearest.remaining) : '--:--:--';
-    $('proxDesc').textContent = nearest ? '💊 ' + nearest.desc : 'Nenhum agendamento ativo';
+    $('proxDesc').textContent = nearest ? nearest.desc : 'Sem horários ativos';
 
     return nearest;
   }
@@ -203,8 +259,10 @@ const ElosUI = (function () {
     $,
     updateThemeIcon,
     toggleTheme,
+    selectMainTab,
     showToast,
     setConnectionStatus,
+    updateRfidStatus,
     refreshClockDisplays,
     selectMode,
     stepClock,

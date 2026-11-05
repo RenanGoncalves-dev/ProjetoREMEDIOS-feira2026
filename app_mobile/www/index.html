@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#2563eb">
-  <title>E.L.O.S. App Bluetooth</title>
+  <meta name="theme-color" content="#0f172a">
+  <title>E.L.O.S. Controle de Dispensação</title>
 
   <!-- Inicialização imediata do tema -->
   <script>
@@ -15,7 +15,7 @@
     })();
   </script>
 
-  <!-- Estilos Modulares (Design System Acessível PCD/TDAH) -->
+  <!-- Estilos Modulares (Design Sóbrio e Organizado em Abas) -->
   <link rel="stylesheet" href="css/styles.css">
 
   <!-- Runtime Nativo Capacitor + Plugins Bluetooth LE & Notificações Locais -->
@@ -24,268 +24,392 @@
   <script src="vendor/notifications-plugin.js"></script>
 </head>
 <body>
+  <!-- CABEÇALHO SÓBRIO -->
   <header>
-    <h1>
+    <div class="brand">
       <span id="conn" class="dot" title="Status Bluetooth"></span>
-      E.L.O.S.
-    </h1>
+      <div>
+        <h1>E.L.O.S.</h1>
+        <span class="brand-sub" id="connText">Desconectado</span>
+      </div>
+    </div>
     <div class="header-actions">
       <button class="bt-btn" id="btBtn" onclick="ElosBluetooth.toggleConnection()">
-        🔵 Conectar Caixa
+        Conectar Caixa
       </button>
-      <button class="icon-btn" onclick="ElosAlarm.triggerAlarm('Teste de Notificação e Toque do Celular')" title="Testar Alarme" aria-label="Testar Alarme">
-        🔔
-      </button>
-      <button class="icon-btn" id="themeBtn" onclick="ElosUI.toggleTheme()" aria-label="Alternar tema">
-        🌙
+      <button class="icon-btn" id="themeBtn" onclick="ElosUI.toggleTheme()" title="Alternar tema claro/escuro" aria-label="Alternar tema">
+        Tema
       </button>
     </div>
   </header>
 
+  <!-- NAVEGAÇÃO PRINCIPAL POR ABAS (MECÂNICAS SEPARADAS) -->
+  <nav class="main-nav" role="tablist" aria-label="Seções do Aplicativo">
+    <button
+      type="button"
+      class="nav-tab active"
+      id="nav_agendamento"
+      role="tab"
+      aria-selected="true"
+      onclick="ElosUI.selectMainTab('agendamento')"
+    >
+      <span>Agendamento</span>
+      <span class="tab-badge" id="badge_agendamentos">0</span>
+    </button>
+
+    <button
+      type="button"
+      class="nav-tab"
+      id="nav_rfid"
+      role="tab"
+      aria-selected="false"
+      onclick="ElosUI.selectMainTab('rfid')"
+    >
+      <span>Tag RFID</span>
+    </button>
+
+    <button
+      type="button"
+      class="nav-tab"
+      id="nav_notificacoes"
+      role="tab"
+      aria-selected="false"
+      onclick="ElosUI.selectMainTab('notificacoes')"
+    >
+      <span>Notificações</span>
+    </button>
+  </nav>
+
   <main>
-    <!-- PRÓXIMA DOSE -->
-    <section class="card hero full">
-      <div class="muted">Próxima dose programada em</div>
-      <div class="countdown" id="proxTempo">--:--:--</div>
-      <div class="muted" id="proxDesc">Conecte via Bluetooth para sincronizar</div>
-    </section>
-
-    <!-- AGENDAR NOVA DOSE (INTERFACE ACESSÍVEL PCD / TDAH) -->
-    <section class="card">
-      <h2>⏰ Programar Horário do Remédio</h2>
-
-      <div class="step-title">1️⃣ Qual é o medicamento? (Opcional)</div>
-      <input type="text" id="inp_nome_remedio" maxlength="22" placeholder="Ex: Dipirona, Vitamina, Pressão...">
-
-      <div class="step-title">2️⃣ Como você quer programar?</div>
-      <div class="mode-tabs" role="tablist">
-        <button type="button" class="mode-tab active" id="tab_horario" onclick="ElosUI.selectMode('horario')">
-          <span class="icon">🕒</span>
-          <span>Hora Fixa</span>
-        </button>
-        <button type="button" class="mode-tab" id="tab_intervalo" onclick="ElosUI.selectMode('intervalo')">
-          <span class="icon">🔁</span>
-          <span>De X em X h</span>
-        </button>
-        <button type="button" class="mode-tab" id="tab_cronometro" onclick="ElosUI.selectMode('cronometro')">
-          <span class="icon">⏳</span>
-          <span>Daqui a pouco</span>
-        </button>
-      </div>
-
-      <!-- MODO 1: HORA FIXA (COM ATALHOS DE TURNO + RELÓGIO GIGANTE) -->
-      <div id="div_horario">
-        <div class="muted" style="margin-bottom:6px">Toque em um turno rápido ou ajuste nos botões grandes:</div>
-        <div class="preset-grid">
-          <button type="button" class="preset-btn" onclick="ElosUI.setClockPreset(8, 0, 'Manhã')">
-            <span>🌅 Manhã</span> <small>08:00</small>
-          </button>
-          <button type="button" class="preset-btn" onclick="ElosUI.setClockPreset(12, 0, 'Almoço')">
-            <span>☀️ Almoço</span> <small>12:00</small>
-          </button>
-          <button type="button" class="preset-btn" onclick="ElosUI.setClockPreset(16, 0, 'Tarde')">
-            <span>🌤️ Tarde</span> <small>16:00</small>
-          </button>
-          <button type="button" class="preset-btn" onclick="ElosUI.setClockPreset(20, 0, 'Noite')">
-            <span>🌙 Noite</span> <small>20:00</small>
-          </button>
+    <!-- ======================================================================
+         ABA 1: AGENDAMENTO & ESTOQUE
+         ====================================================================== -->
+    <div id="pane_agendamento" class="tab-pane active" role="tabpanel">
+      <!-- RESUMO RÁPIDO: PRÓXIMA DOSE + ESTOQUE -->
+      <div class="summary-grid">
+        <div class="summary-box">
+          <div class="label">Próxima Dose</div>
+          <div class="value" id="proxTempo">--:--:--</div>
+          <div class="sub" id="proxDesc">Sem horários ativos</div>
         </div>
 
-        <div class="clock-box">
-          <div class="clock-picker">
-            <div class="clock-col">
-              <span class="clock-label">Hora</span>
-              <button type="button" class="step-btn" onclick="ElosUI.stepClock(1, 0)" aria-label="Aumentar 1 hora">▲ +1h</button>
-              <div class="clock-digits" id="disp_hora">08</div>
-              <button type="button" class="step-btn" onclick="ElosUI.stepClock(-1, 0)" aria-label="Diminuir 1 hora">▼ -1h</button>
+        <div class="summary-box">
+          <div class="label">Estoque na Caixa</div>
+          <div class="value"><span id="eOcup">-</span> / <span id="eTotal">-</span></div>
+          <div class="bar"><div id="eBar"></div></div>
+          <div class="sub">Doses disponíveis</div>
+        </div>
+      </div>
+
+      <!-- PROGRAMAR HORÁRIO -->
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2>Novo Agendamento</h2>
+            <p class="card-desc">Defina o medicamento e o modo de liberação automática</p>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="inp_nome_remedio">Identificação do medicamento (opcional)</label>
+          <input type="text" id="inp_nome_remedio" maxlength="22" placeholder="Ex: Dipirona, Pressão, Vitamina...">
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">Modo de programação</label>
+          <div class="segmented-control" role="tablist">
+            <button type="button" class="seg-btn active" id="tab_horario" onclick="ElosUI.selectMode('horario')">
+              Hora Fixa
+            </button>
+            <button type="button" class="seg-btn" id="tab_intervalo" onclick="ElosUI.selectMode('intervalo')">
+              Intervalo (X em X h)
+            </button>
+            <button type="button" class="seg-btn" id="tab_cronometro" onclick="ElosUI.selectMode('cronometro')">
+              Cronômetro
+            </button>
+          </div>
+        </div>
+
+        <!-- MODO 1: HORA FIXA -->
+        <div id="div_horario">
+          <div class="preset-grid">
+            <button type="button" class="preset-btn" onclick="ElosUI.setClockPreset(8, 0, 'Manhã')">
+              <span>Manhã</span> <small>08:00</small>
+            </button>
+            <button type="button" class="preset-btn" onclick="ElosUI.setClockPreset(12, 0, 'Almoço')">
+              <span>Almoço</span> <small>12:00</small>
+            </button>
+            <button type="button" class="preset-btn" onclick="ElosUI.setClockPreset(16, 0, 'Tarde')">
+              <span>Tarde</span> <small>16:00</small>
+            </button>
+            <button type="button" class="preset-btn" onclick="ElosUI.setClockPreset(20, 0, 'Noite')">
+              <span>Noite</span> <small>20:00</small>
+            </button>
+          </div>
+
+          <div class="clock-box">
+            <div class="clock-picker">
+              <div class="clock-col">
+                <span class="clock-label">Hora</span>
+                <button type="button" class="step-btn" onclick="ElosUI.stepClock(1, 0)" aria-label="Aumentar 1 hora">+ 1h</button>
+                <div class="clock-digits" id="disp_hora">08</div>
+                <button type="button" class="step-btn" onclick="ElosUI.stepClock(-1, 0)" aria-label="Diminuir 1 hora">- 1h</button>
+              </div>
+
+              <div class="clock-sep">:</div>
+
+              <div class="clock-col">
+                <span class="clock-label">Minuto</span>
+                <button type="button" class="step-btn" onclick="ElosUI.stepClock(0, 5)" aria-label="Aumentar 5 minutos">+ 5m</button>
+                <div class="clock-digits" id="disp_min">00</div>
+                <button type="button" class="step-btn" onclick="ElosUI.stepClock(0, -5)" aria-label="Diminuir 5 minutos">- 5m</button>
+              </div>
             </div>
+          </div>
 
-            <div class="clock-sep">:</div>
+          <label class="toggle-row" for="h_diario">
+            <div class="toggle-text">
+              <strong>Repetir diariamente</strong>
+              <span>Mantém este horário ativo todos os dias</span>
+            </div>
+            <input type="checkbox" id="h_diario" checked>
+          </label>
+        </div>
 
-            <div class="clock-col">
-              <span class="clock-label">Minuto</span>
-              <button type="button" class="step-btn" onclick="ElosUI.stepClock(0, 5)" aria-label="Aumentar 5 minutos">▲ +5m</button>
-              <div class="clock-digits" id="disp_min">00</div>
-              <button type="button" class="step-btn" onclick="ElosUI.stepClock(0, -5)" aria-label="Diminuir 5 minutos">▼ -5m</button>
+        <!-- MODO 2: INTERVALO -->
+        <div id="div_intervalo" class="hidden">
+          <div class="preset-grid">
+            <button type="button" class="preset-btn" onclick="ElosUI.setIntervalPreset(4)">
+              <span>4 em 4 horas</span> <small>6 doses/dia</small>
+            </button>
+            <button type="button" class="preset-btn" onclick="ElosUI.setIntervalPreset(6)">
+              <span>6 em 6 horas</span> <small>4 doses/dia</small>
+            </button>
+            <button type="button" class="preset-btn" onclick="ElosUI.setIntervalPreset(8)">
+              <span>8 em 8 horas</span> <small>3 doses/dia</small>
+            </button>
+            <button type="button" class="preset-btn" onclick="ElosUI.setIntervalPreset(12)">
+              <span>12 em 12 horas</span> <small>2 doses/dia</small>
+            </button>
+          </div>
+
+          <div class="clock-box">
+            <div class="clock-picker">
+              <button type="button" class="step-btn" style="max-width:92px" onclick="ElosUI.stepInterval(-1)">- 1h</button>
+              <div style="text-align:center; padding:0 14px">
+                <div class="clock-label">Intervalo</div>
+                <div class="clock-digits" id="disp_intervalo">8h</div>
+              </div>
+              <button type="button" class="step-btn" style="max-width:92px" onclick="ElosUI.stepInterval(1)">+ 1h</button>
             </div>
           </div>
         </div>
 
-        <label class="repeat-toggle" for="h_diario">
-          <span>🔁 Repetir este horário todos os dias</span>
-          <input type="checkbox" id="h_diario" checked>
-        </label>
-      </div>
-
-      <!-- MODO 2: INTERVALO DE X EM X HORAS (RECEITA MÉDICA) -->
-      <div id="div_intervalo" class="hidden">
-        <div class="muted" style="margin-bottom:6px">Escolha o intervalo da receita médica:</div>
-        <div class="preset-grid">
-          <button type="button" class="preset-btn" onclick="ElosUI.setIntervalPreset(4)">
-            <span>⏱️ 4 em 4h</span> <small>6x/dia</small>
-          </button>
-          <button type="button" class="preset-btn" onclick="ElosUI.setIntervalPreset(6)">
-            <span>⏱️ 6 em 6h</span> <small>4x/dia</small>
-          </button>
-          <button type="button" class="preset-btn" onclick="ElosUI.setIntervalPreset(8)">
-            <span>⏱️ 8 em 8h</span> <small>3x/dia</small>
-          </button>
-          <button type="button" class="preset-btn" onclick="ElosUI.setIntervalPreset(12)">
-            <span>⏱️ 12 em 12h</span> <small>2x/dia</small>
-          </button>
-        </div>
-
-        <div class="clock-box">
-          <div class="clock-picker">
-            <button type="button" class="step-btn" style="max-width:90px" onclick="ElosUI.stepInterval(-1)">➖ 1h</button>
-            <div style="text-align:center; padding:0 12px">
-              <div class="clock-label">Repetir a cada</div>
-              <div class="clock-digits" id="disp_intervalo">8h</div>
-            </div>
-            <button type="button" class="step-btn" style="max-width:90px" onclick="ElosUI.stepInterval(1)">➕ 1h</button>
+        <!-- MODO 3: CRONÔMETRO -->
+        <div id="div_cronometro" class="hidden">
+          <div class="preset-grid">
+            <button type="button" class="preset-btn" onclick="ElosUI.setTimerPreset(0, 1)">
+              <span>1 minuto</span> <small>Teste rápido</small>
+            </button>
+            <button type="button" class="preset-btn" onclick="ElosUI.setTimerPreset(0, 15)">
+              <span>15 minutos</span> <small>Curto</small>
+            </button>
+            <button type="button" class="preset-btn" onclick="ElosUI.setTimerPreset(0, 30)">
+              <span>30 minutos</span> <small>Médio</small>
+            </button>
+            <button type="button" class="preset-btn" onclick="ElosUI.setTimerPreset(1, 0)">
+              <span>1 hora</span> <small>Longo</small>
+            </button>
           </div>
-        </div>
-      </div>
 
-      <!-- MODO 3: CRONÔMETRO (DAQUI A POUCO / TESTE RÁPIDO) -->
-      <div id="div_cronometro" class="hidden">
-        <div class="muted" style="margin-bottom:6px">Atalhos rápidos de tempo:</div>
-        <div class="preset-grid">
-          <button type="button" class="preset-btn" onclick="ElosUI.setTimerPreset(0, 1)">
-            <span>⚡ Teste Rápido</span> <small>1 min</small>
-          </button>
-          <button type="button" class="preset-btn" onclick="ElosUI.setTimerPreset(0, 15)">
-            <span>⏳ Curto</span> <small>15 min</small>
-          </button>
-          <button type="button" class="preset-btn" onclick="ElosUI.setTimerPreset(0, 30)">
-            <span>⏳ Médio</span> <small>30 min</small>
-          </button>
-          <button type="button" class="preset-btn" onclick="ElosUI.setTimerPreset(1, 0)">
-            <span>⏳ Longo</span> <small>1 hora</small>
-          </button>
-        </div>
+          <div class="clock-box">
+            <div class="clock-picker">
+              <div class="clock-col">
+                <span class="clock-label">Horas</span>
+                <button type="button" class="step-btn" onclick="ElosUI.stepTimer(1, 0)">+ 1h</button>
+                <div class="clock-digits" id="disp_c_hora">00</div>
+                <button type="button" class="step-btn" onclick="ElosUI.stepTimer(-1, 0)">- 1h</button>
+              </div>
 
-        <div class="clock-box">
-          <div class="clock-picker">
-            <div class="clock-col">
-              <span class="clock-label">Horas</span>
-              <button type="button" class="step-btn" onclick="ElosUI.stepTimer(1, 0)">▲ +1h</button>
-              <div class="clock-digits" id="disp_c_hora">00</div>
-              <button type="button" class="step-btn" onclick="ElosUI.stepTimer(-1, 0)">▼ -1h</button>
-            </div>
+              <div class="clock-sep">:</div>
 
-            <div class="clock-sep">:</div>
-
-            <div class="clock-col">
-              <span class="clock-label">Minutos</span>
-              <button type="button" class="step-btn" onclick="ElosUI.stepTimer(0, 1)">▲ +1m</button>
-              <div class="clock-digits" id="disp_c_min">15</div>
-              <button type="button" class="step-btn" onclick="ElosUI.stepTimer(0, -1)">▼ -1m</button>
+              <div class="clock-col">
+                <span class="clock-label">Minutos</span>
+                <button type="button" class="step-btn" onclick="ElosUI.stepTimer(0, 1)">+ 1m</button>
+                <div class="clock-digits" id="disp_c_min">15</div>
+                <button type="button" class="step-btn" onclick="ElosUI.stepTimer(0, -1)">- 1m</button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <button class="btn ok" onclick="ElosApp.saveSchedule()">
-        ✅ Confirmar e Salvar Horário
-      </button>
-    </section>
-
-    <!-- ESTOQUE E DISPENSAÇÃO MANUAL -->
-    <section class="card">
-      <h2>📦 Estoque da Caixa</h2>
-      <div class="stock-num"><span id="eOcup">-</span> / <span id="eTotal">-</span></div>
-      <div class="bar"><div id="eBar"></div></div>
-      <div class="muted" style="text-align:center">Doses disponíveis / Capacidade total</div>
-
-      <div class="row" style="margin-top:10px">
-        <div>
-          <label for="inp_total">Capacidade</label>
-          <input type="number" id="inp_total" min="1" value="7" inputmode="numeric">
-        </div>
-        <div>
-          <label for="inp_ocupados">Abastecidos agora</label>
-          <input type="number" id="inp_ocupados" min="0" placeholder="Ex: 7" inputmode="numeric">
-        </div>
-      </div>
-      <button class="btn warn" onclick="ElosApp.updateStock()">🔄 Salvar Abastecimento</button>
-      <button class="btn" id="btnDispense" onclick="ElosApp.dispenseNow()">💊 Dispensar 1 Dose Agora</button>
-    </section>
-
-    <!-- NOVO CARD: TOQUES PRÉ-INSTALADOS DO CELULAR, NOTIFICAÇÃO E CONTROLE RFID -->
-    <section class="card full">
-      <h2>🎵 Toque de Alerta no Celular, Notificações & Controle RFID</h2>
-
-      <div class="tone-current-box">
-        <span class="muted">Toque selecionado atualmente para liberação:</span>
-        <strong id="lbl_toque_atual">Padrão do Celular (📞 Toque de Chamada)</strong>
-      </div>
-
-      <div class="step-title">1️⃣ Escolha o estilo do som quando liberar o remédio:</div>
-      <div class="sound-type-tabs">
-        <button type="button" class="mode-tab" id="tab_som_notif" onclick="ElosAlarm.setSoundCategory('notificacao')">
-          <span class="icon">💬</span>
-          <span>Som de Notificação (Tipo Mensagem)</span>
+        <button class="btn primary" onclick="ElosApp.saveSchedule()">
+          Salvar Agendamento
         </button>
-        <button type="button" class="mode-tab active" id="tab_som_chamada" onclick="ElosAlarm.setSoundCategory('chamada')">
-          <span class="icon">📞</span>
-          <span>Toque Inteiro (Tipo Chamada)</span>
-        </button>
-      </div>
+      </section>
 
-      <div class="step-title">2️⃣ Pesquisar nos toques pré-instalados do seu celular:</div>
-      <input
-        type="text"
-        id="inp_busca_toque"
-        placeholder="🔍 Digite para pesquisar um toque do celular..."
-        oninput="ElosAlarm.filterTones(this.value)"
-      >
+      <!-- LISTA DE HORÁRIOS PROGRAMADOS -->
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2>Horários Ativos</h2>
+            <p class="card-desc">Programações sincronizadas na memória da caixa</p>
+          </div>
+        </div>
 
-      <div class="tone-list-container">
-        <ul id="lista_toques_celular">
-          <li class="empty">Carregando toques do celular...</li>
+        <ul id="lista">
+          <li class="empty">Conecte a caixa via Bluetooth para visualizar</li>
         </ul>
-      </div>
 
-      <div class="row" style="margin-top:8px">
-        <button type="button" class="btn" style="margin-top:6px" onclick="ElosAlarm.openSystemRingtonePicker()">
-          📂 Abrir Seletor do Android
+        <button class="btn danger" id="btnLimpar" onclick="ElosApp.clearSchedules()">
+          Limpar Todos os Horários
         </button>
-        <button type="button" class="btn warn" style="margin-top:6px" onclick="ElosAlarm.triggerAlarm('Teste do Toque e Notificação Fora do App')">
-          🔔 Testar Toque e Notificação
+      </section>
+
+      <!-- CONTROLE DE ESTOQUE E DISPENSAÇÃO MANUAL -->
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2>Abastecimento e Liberação Manual</h2>
+            <p class="card-desc">Atualize a quantidade de doses ou acione o motor imediatamente</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label class="field-label" for="inp_total">Capacidade Total</label>
+            <input type="number" id="inp_total" min="1" value="7" inputmode="numeric">
+          </div>
+          <div>
+            <label class="field-label" for="inp_ocupados">Doses Abastecidas</label>
+            <input type="number" id="inp_ocupados" min="0" placeholder="Ex: 7" inputmode="numeric">
+          </div>
+        </div>
+
+        <div class="row">
+          <button class="btn" onclick="ElosApp.updateStock()">Atualizar Estoque</button>
+          <button class="btn primary" id="btnDispense" onclick="ElosApp.dispenseNow()">Dispensar 1 Dose</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ======================================================================
+         ABA 2: TAG RFID (EMERGÊNCIA / CUIDADOR)
+         ====================================================================== -->
+    <div id="pane_rfid" class="tab-pane" role="tabpanel">
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2>Leitor RFID RC522 — Emergência e Cuidadores</h2>
+            <p class="card-desc">
+              Aproxime o cartão ou chaveiro RFID na caixa física para liberar instantaneamente uma dose de emergência sem precisar abrir o aplicativo.
+            </p>
+          </div>
+        </div>
+
+        <div class="rfid-status-box">
+          <div class="rfid-badge">Leitor Ativo na Caixa</div>
+          <div class="rfid-uid" id="rfid_last_uid">Nenhuma leitura recente nesta sessão</div>
+          <div class="muted" id="rfid_last_time">Aguardando aproximação de cartão ou tag RFID...</div>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">Comportamento do Alarme no Celular</label>
+          <label class="toggle-row" for="chk_alarme_rfid" style="margin-top:0">
+            <div class="toggle-text">
+              <strong>Tocar alarme quando liberado via Tag RFID</strong>
+              <span>
+                Por padrão, o alarme toca apenas nos horários programados. Ative esta opção se desejar que o celular também toque e notifique quando o cuidador usar o cartão RFID.
+              </span>
+            </div>
+            <input type="checkbox" id="chk_alarme_rfid" onchange="ElosAlarm.setRingOnRfid(this.checked)">
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2>Acionamento Remoto de Emergência</h2>
+            <p class="card-desc">Caso esteja sem o cartão físico em mãos, você pode liberar uma dose imediata pelo Bluetooth</p>
+          </div>
+        </div>
+
+        <button class="btn primary" onclick="ElosApp.dispenseNow()">
+          Liberar Dose de Emergência Agora
         </button>
-      </div>
+      </section>
+    </div>
 
-      <div class="step-title" style="margin-top:18px">3️⃣ Controle do Cartão RFID (Emergência / Cuidador):</div>
-      <label class="repeat-toggle" for="chk_alarme_rfid">
-        <span>💳 Tocar alarme no celular também quando liberado pelo Cartão RFID</span>
-        <input type="checkbox" id="chk_alarme_rfid" onchange="ElosAlarm.setRingOnRfid(this.checked)">
-      </label>
-      <div class="muted" style="margin-top:4px">
-        * O alarme toca sempre nos horários programados pelo App. Marque a opção acima se quiser que o celular também toque quando o cuidador passar o cartão RFID na caixa.
-      </div>
-    </section>
+    <!-- ======================================================================
+         ABA 3: NOTIFICAÇÕES & TOQUES DO CELULAR
+         ====================================================================== -->
+    <div id="pane_notificacoes" class="tab-pane" role="tabpanel">
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2>Alerta Sonoro e Notificações</h2>
+            <p class="card-desc">
+              Configure o som que tocará no celular (mesmo fora do aplicativo) quando um medicamento programado for liberado.
+            </p>
+          </div>
+        </div>
 
-    <!-- LISTA DE AGENDAMENTOS -->
-    <section class="card full">
-      <h2>📋 Horários Programados</h2>
-      <ul id="lista">
-        <li class="empty">Desconectado</li>
-      </ul>
-      <button class="btn danger" id="btnLimpar" onclick="ElosApp.clearSchedules()">🗑️ Apagar Todos os Horários</button>
-    </section>
+        <div class="status-banner">
+          <span class="muted">Toque selecionado atualmente</span>
+          <strong id="lbl_toque_atual">Padrão do Celular (Toque de Chamada)</strong>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">Tipo de alerta sonoro</label>
+          <div class="segmented-control">
+            <button type="button" class="seg-btn" id="tab_som_notif" onclick="ElosAlarm.setSoundCategory('notificacao')">
+              Som de Notificação (Mensagem)
+            </button>
+            <button type="button" class="seg-btn active" id="tab_som_chamada" onclick="ElosAlarm.setSoundCategory('chamada')">
+              Toque Inteiro (Chamada)
+            </button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="inp_busca_toque">Toques pré-instalados no aparelho</label>
+          <input
+            type="text"
+            id="inp_busca_toque"
+            placeholder="Pesquisar pelo nome do toque no celular..."
+            oninput="ElosAlarm.filterTones(this.value)"
+          >
+        </div>
+
+        <div class="tone-list-container">
+          <ul id="lista_toques_celular">
+            <li class="empty">Carregando toques do aparelho...</li>
+          </ul>
+        </div>
+
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="btn" onclick="ElosAlarm.openSystemRingtonePicker()">
+            Seletor Nativo do Android
+          </button>
+          <button type="button" class="btn primary" onclick="ElosAlarm.triggerAlarm('Teste de Alerta Sonoro e Notificação Externa')">
+            Testar Alerta e Som
+          </button>
+        </div>
+      </section>
+    </div>
   </main>
 
-  <!-- MODAL DE ALERTA EM TELA CHEIA -->
+  <!-- MODAL DE ALERTA DE MEDICAMENTO -->
   <div id="alarmModal" class="alarm-modal hidden" role="alertdialog" aria-modal="true">
     <div class="alarm-box">
-      <div class="alarm-icon">💊</div>
-      <h2 class="alarm-title">HORA DO REMÉDIO!</h2>
+      <div class="alarm-badge">Alerta de Medicamento</div>
+      <h2 class="alarm-title">Hora do Remédio</h2>
       <div class="alarm-time" id="alarmModalTime">08:00</div>
-      <p class="muted" style="margin:0">O seu medicamento foi liberado na Caixa E.L.O.S.:</p>
+      <p class="muted" style="margin:0">Medicamento liberado na Caixa E.L.O.S.:</p>
       <div class="alarm-desc" id="alarmModalDesc">Dose Liberada</div>
       <button type="button" class="alarm-confirm-btn" onclick="ElosAlarm.stopAlarm()">
-        ✅ JÁ PEGUEI O REMÉDIO (Parar Toque)
+        Confirmar Retirada (Parar Som)
       </button>
     </div>
   </div>
