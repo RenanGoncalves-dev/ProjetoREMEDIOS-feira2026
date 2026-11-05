@@ -19,6 +19,8 @@ Pop-Location
 Write-Host "`n[2/4] Salvando alteracoes locais e enviando para o compilador..." -ForegroundColor Cyan
 # Se o usuario recortou/moveu o APK antigo da pasta, restaura a referencia antes do commit
 git checkout HEAD -- app_mobile/ELOS_Caixa.apk 2>$null
+# Garante que extensoes do VS Code nao alterem a versao do Gradle do Android
+(Get-Content "app_mobile\android\gradle\wrapper\gradle-wrapper.properties") -replace "gradle-.*-bin\.zip", "gradle-8.2.1-all.zip" | Set-Content "app_mobile\android\gradle\wrapper\gradle-wrapper.properties" -Encoding UTF8
 git add -A
 git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {

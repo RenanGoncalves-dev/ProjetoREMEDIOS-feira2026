@@ -37,6 +37,7 @@ jobs:
       - name: Compilar APK Debug
         working-directory: ./app_mobile/android
         run: |
+          sed -i 's|gradle-.*-bin.zip|gradle-8.2.1-all.zip|g' gradle/wrapper/gradle-wrapper.properties
           chmod +x gradlew
           ./gradlew assembleDebug
 
