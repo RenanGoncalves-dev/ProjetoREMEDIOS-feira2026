@@ -17,16 +17,18 @@ npx cap sync android
 Pop-Location
 
 Write-Host "`n[2/4] Salvando alteracoes locais e enviando para o compilador..." -ForegroundColor Cyan
-git add app_mobile/www app_mobile/android app_mobile/package.json app_mobile/capacitor.config.json .github compilar_apk.ps1 README.md
+# Se o usuario recortou/moveu o APK antigo da pasta, restaura a referencia antes do commit
+git checkout HEAD -- app_mobile/ELOS_Caixa.apk 2>$null
+git add -A
 git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {
     git commit -m "build: Gera nova versao do APK ($agora)"
 }
 
-git pull --rebase -X ours origin main
+git pull --rebase --autostash -X ours origin main
 if ($LASTEXITCODE -ne 0) {
     git rebase --abort 2>$null
-    git pull --no-edit -X ours origin main
+    git pull --no-edit --autostash -X ours origin main
 }
 
 $hashAntes = (git rev-parse HEAD).Trim()
@@ -37,7 +39,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Host "`n[3/4] Compilando o novo ELOS_Caixa.apk na nuvem (aguarde ~60 a 90 segundos)..." -ForegroundColor Yellow
+Write-Host "`n[3/4] Compilando o novo ELOS_Caixa.apk na nuvem (aguarde ~60 a 100 segundos)..." -ForegroundColor Yellow
 $tempoDecorrido = 0
 $compilou = $false
 
@@ -54,7 +56,8 @@ while ($tempoDecorrido -lt 180) {
 }
 
 Write-Host "`n[4/4] Baixando o novo ELOS_Caixa.apk pronto para a sua pasta..." -ForegroundColor Cyan
-git pull --rebase origin main
+git fetch origin main
+git reset --hard origin/main
 
 $infoApk = Get-Item "app_mobile\ELOS_Caixa.apk" -ErrorAction SilentlyContinue
 if ($infoApk) {

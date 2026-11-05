@@ -617,3 +617,88 @@ li .del {
   opacity: 1;
   transform: translate(-50%, 0);
 }
+
+
+/* ==========================================================================
+   SELETOR DE TOQUES PRÉ-INSTALADOS DO CELULAR & CONTROLE RFID
+   ========================================================================== */
+
+.tone-current-box {
+  background: var(--soft);
+  border: 2px solid var(--primary);
+  border-radius: 14px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 0.92rem;
+}
+
+.tone-current-box strong {
+  color: var(--primary);
+  display: block;
+  font-size: 1rem;
+  margin-top: 2px;
+}
+
+.sound-type-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tone-list-container {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface2);
+  padding: 6px;
+  margin-top: 8px;
+}
+
+.tone-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tone-item:last-child {
+  border-bottom: 0;
+}
+
+.tone-item.active {
+  background: var(--soft);
+  border-radius: 10px;
+}
+
+.tone-select-btn {
+  flex: 1;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tone-play-btn {
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--primary);
+  font-weight: 800;
+  font-size: 0.85rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}

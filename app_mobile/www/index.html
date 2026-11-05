@@ -33,7 +33,7 @@
       <button class="bt-btn" id="btBtn" onclick="ElosBluetooth.toggleConnection()">
         🔵 Conectar Caixa
       </button>
-      <button class="icon-btn" onclick="ElosAlarm.triggerAlarm('Teste de Alerta Sonoro e Voz')" title="Testar Alarme" aria-label="Testar Alarme">
+      <button class="icon-btn" onclick="ElosAlarm.triggerAlarm('Teste de Notificação e Toque do Celular')" title="Testar Alarme" aria-label="Testar Alarme">
         🔔
       </button>
       <button class="icon-btn" id="themeBtn" onclick="ElosUI.toggleTheme()" aria-label="Alternar tema">
@@ -212,6 +212,60 @@
       <button class="btn" id="btnDispense" onclick="ElosApp.dispenseNow()">💊 Dispensar 1 Dose Agora</button>
     </section>
 
+    <!-- NOVO CARD: TOQUES PRÉ-INSTALADOS DO CELULAR, NOTIFICAÇÃO E CONTROLE RFID -->
+    <section class="card full">
+      <h2>🎵 Toque de Alerta no Celular, Notificações & Controle RFID</h2>
+
+      <div class="tone-current-box">
+        <span class="muted">Toque selecionado atualmente para liberação:</span>
+        <strong id="lbl_toque_atual">Padrão do Celular (📞 Toque de Chamada)</strong>
+      </div>
+
+      <div class="step-title">1️⃣ Escolha o estilo do som quando liberar o remédio:</div>
+      <div class="sound-type-tabs">
+        <button type="button" class="mode-tab" id="tab_som_notif" onclick="ElosAlarm.setSoundCategory('notificacao')">
+          <span class="icon">💬</span>
+          <span>Som de Notificação (Tipo Mensagem)</span>
+        </button>
+        <button type="button" class="mode-tab active" id="tab_som_chamada" onclick="ElosAlarm.setSoundCategory('chamada')">
+          <span class="icon">📞</span>
+          <span>Toque Inteiro (Tipo Chamada)</span>
+        </button>
+      </div>
+
+      <div class="step-title">2️⃣ Pesquisar nos toques pré-instalados do seu celular:</div>
+      <input
+        type="text"
+        id="inp_busca_toque"
+        placeholder="🔍 Digite para pesquisar um toque do celular..."
+        oninput="ElosAlarm.filterTones(this.value)"
+      >
+
+      <div class="tone-list-container">
+        <ul id="lista_toques_celular">
+          <li class="empty">Carregando toques do celular...</li>
+        </ul>
+      </div>
+
+      <div class="row" style="margin-top:8px">
+        <button type="button" class="btn" style="margin-top:6px" onclick="ElosAlarm.openSystemRingtonePicker()">
+          📂 Abrir Seletor do Android
+        </button>
+        <button type="button" class="btn warn" style="margin-top:6px" onclick="ElosAlarm.triggerAlarm('Teste do Toque e Notificação Fora do App')">
+          🔔 Testar Toque e Notificação
+        </button>
+      </div>
+
+      <div class="step-title" style="margin-top:18px">3️⃣ Controle do Cartão RFID (Emergência / Cuidador):</div>
+      <label class="repeat-toggle" for="chk_alarme_rfid">
+        <span>💳 Tocar alarme no celular também quando liberado pelo Cartão RFID</span>
+        <input type="checkbox" id="chk_alarme_rfid" onchange="ElosAlarm.setRingOnRfid(this.checked)">
+      </label>
+      <div class="muted" style="margin-top:4px">
+        * O alarme toca sempre nos horários programados pelo App. Marque a opção acima se quiser que o celular também toque quando o cuidador passar o cartão RFID na caixa.
+      </div>
+    </section>
+
     <!-- LISTA DE AGENDAMENTOS -->
     <section class="card full">
       <h2>📋 Horários Programados</h2>
@@ -222,7 +276,7 @@
     </section>
   </main>
 
-  <!-- MODAL DE ALERTA EM TELA CHEIA (TOCA SOM, VIBRA E FALA NA HORA DO REMÉDIO) -->
+  <!-- MODAL DE ALERTA EM TELA CHEIA -->
   <div id="alarmModal" class="alarm-modal hidden" role="alertdialog" aria-modal="true">
     <div class="alarm-box">
       <div class="alarm-icon">💊</div>
@@ -231,7 +285,7 @@
       <p class="muted" style="margin:0">O seu medicamento foi liberado na Caixa E.L.O.S.:</p>
       <div class="alarm-desc" id="alarmModalDesc">Dose Liberada</div>
       <button type="button" class="alarm-confirm-btn" onclick="ElosAlarm.stopAlarm()">
-        ✅ JÁ PEGUEI O REMÉDIO
+        ✅ JÁ PEGUEI O REMÉDIO (Parar Toque)
       </button>
     </div>
   </div>

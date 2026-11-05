@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Controlador Principal da Aplicação (Estado, Eventos, Alarme e Regras)
+   Controlador Principal da Aplicação (Estado, Eventos, RFID, Alarme e Regras)
    ========================================================================== */
 
 const ElosApp = (function () {
@@ -7,21 +7,45 @@ const ElosApp = (function () {
   let lastSyncTimestamp = Date.now();
   let isTotalInitialized = false;
   let lastTriggeredScheduleKey = null;
+  let lastAlarmTriggerMs = 0;
+
+  function triggerSafeAlarm(desc, titulo) {
+    // Evita disparo duplicado no mesmo segundo (ex: cronômetro local + evento BT simultâneos)
+    if (Date.now() - lastAlarmTriggerMs < 3500) return;
+    lastAlarmTriggerMs = Date.now();
+    ElosAlarm.triggerAlarm(desc, titulo);
+  }
 
   function handleIncomingPayload(line) {
     try {
       const json = JSON.parse(line);
       if (json.evento) {
         if (json.evento === 'DISPENSADO') {
-          ElosUI.showToast('💊 Dose liberada na Caixa!');
-          ElosAlarm.triggerAlarm('Sua dose acabou de ser liberada na Caixa E.L.O.S.!');
-        } else if (json.evento === 'VAZIO') {
+          const msgDose = json.desc || 'Sua dose foi liberada na Caixa E.L.O.S.!';
+          ElosUI.showToast('💊 ' + msgDose);
+          triggerSafeAlarm(msgDose, '💊 HORA DO REMÉDIO! (E.L.O.S.)');
+        } else if (json.evento === 'DISPENSADO_RFID') {
+          const uidInfo = json.uid ? ` [Cartão: ${json.uid}]` : '';
+          ElosUI.showToast(`💳 Dose de emergência liberada via RFID${uidInfo}`);
+          // Toca o alarme no celular APENAS se o usuário ativou a chave de controle RFID no App!
+          if (ElosAlarm.shouldRingOnRfid()) {
+            triggerSafeAlarm(
+              `Dose de emergência liberada pelo Cuidador via Cartão RFID${uidInfo}.`,
+              '💳 LIBERAÇÃO DE EMERGÊNCIA (RFID)'
+            );
+          }
+        } else if (json.evento === 'VAZIO' || json.evento === 'VAZIO_RFID') {
           ElosUI.showToast('⚠️ A caixa está VAZIA! Abasteça os compartimentos.');
-          ElosAlarm.triggerAlarm('⚠️ ALERTA: Caixa de remédios vazia! Precisa reabastecer.');
+          if (json.evento === 'VAZIO' || ElosAlarm.shouldRingOnRfid()) {
+            triggerSafeAlarm(
+              '⚠️ ALERTA: Tentativa de liberar dose, mas a Caixa está VAZIA!',
+              '⚠️ CAIXA DE REMÉDIOS VAZIA!'
+            );
+          }
         } else if (json.evento === 'FULL') {
           ElosUI.showToast('⚠️ Limite de 8 agendamentos atingido!');
         } else if (json.evento === 'AGENDADO') {
-          ElosUI.showToast('✅ Horário agendado e alarme ativado no celular!');
+          ElosUI.showToast('✅ Horário agendado e alarme configurado no celular!');
         }
         return;
       }
@@ -33,7 +57,7 @@ const ElosApp = (function () {
           ElosUI.$('inp_total').value = state.total;
           isTotalInitialized = true;
         }
-        // Sincroniza também os alarmes nativos do Android para tocar mesmo longe do Bluetooth
+        // Sincroniza os horários com o agendador nativo do Android (para tocar fora do app!)
         ElosAlarm.syncScheduledNotifications(state.agendamentos || []);
         tick();
       }
@@ -48,13 +72,13 @@ const ElosApp = (function () {
       ElosBluetooth.sendCommand('REMOVER:' + id);
     });
 
-    // Quando o cronômetro regressivo atinge 00:00:00, dispara o Alarme no celular
-    // e sincroniza o estado com o ESP32
+    // Quando o cronômetro regressivo de um agendamento programado atinge 00:00:00,
+    // dispara a notificação + toque do celular e sincroniza com o ESP32
     if (nearest && nearest.remaining <= 0) {
       const triggerKey = `${nearest.id}_${lastSyncTimestamp}`;
       if (lastTriggeredScheduleKey !== triggerKey) {
         lastTriggeredScheduleKey = triggerKey;
-        ElosAlarm.triggerAlarm(nearest.desc);
+        triggerSafeAlarm(nearest.desc, '💊 HORA DO REMÉDIO! (E.L.O.S.)');
       }
       if (Date.now() - lastSyncTimestamp > 2500 && ElosBluetooth.isConnected()) {
         ElosBluetooth.sendCommand('STATUS');
