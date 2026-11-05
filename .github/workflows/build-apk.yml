@@ -28,10 +28,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Instalar dependencias Capacitor e Sincronizar Android
+      - name: Instalar dependencias, Compilar React+TS e Sincronizar Android
         working-directory: ./app_mobile
         run: |
           npm install
+          npm run build
           npx cap sync android
 
       - name: Compilar APK Debug

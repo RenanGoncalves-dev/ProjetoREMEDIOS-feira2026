@@ -8,11 +8,15 @@ $ErrorActionPreference = "Continue"
 # Garante que estamos sempre na pasta raiz do projeto (mesmo se chamado de outra subpasta)
 Set-Location $PSScriptRoot
 
-Write-Host "`n[1/4] Preparando versao e sincronizando arquivos (HTML/CSS/JS) com o Android..." -ForegroundColor Cyan
+Write-Host "`n[1/4] Compilando React + TypeScript (Vite) e sincronizando com o Android..." -ForegroundColor Cyan
 $agora = Get-Date -Format "dd/MM/yyyy HH:mm:ss"
-"{ `"compiladoEm`": `"$agora`" }" | Set-Content -Path "app_mobile\www\build-info.json" -Encoding UTF8
 
 Push-Location app_mobile
+if (-not (Test-Path "node_modules\vite")) {
+    npm install
+}
+npm run build
+"{ `"compiladoEm`": `"$agora`" }" | Set-Content -Path "www\build-info.json" -Encoding UTF8
 npx cap sync android
 Pop-Location
 
