@@ -27,6 +27,7 @@
 
 // ============================================================================
 // 2. MAPA OFICIAL DE PINAGEM DO HARDWARE (ESP32 DevKit)
+//    Pinagem do RFID CONFIRMADA pelo Scanner de Diagnóstico (env:scanner)
 // ============================================================================
 // MOTOR DE PASSO 28BYJ-48 + DRIVER ULN2003
 #define IN1 5   // GPIO 5  -> Driver IN1
@@ -37,6 +38,7 @@
 // DISPLAY OLED 0.96" I2C (SSD1306 128x64)
 #define OLED_SDA 14 // GPIO 14 -> Display SDA
 #define OLED_SCL 27 // GPIO 27 -> Display SCL
+#define OLED_ENDERECO 0x3C
 
 // LEITOR RFID RC522 (LIBERAÇÃO DE EMERGÊNCIA / CUIDADOR)
 // ----------------------------------------------------------------------------
@@ -57,17 +59,61 @@
 #define RFID_MISO 35
 #define RFID_RST  32
 
+// BUZZER DE 3 PERNAS (MÓDULO: VCC / GND / I/O)
+// ----------------------------------------------------------------------------
+// Pino no Módulo | Pino no ESP32 | Observação
+// ----------------------------------------------------------------------------
+// VCC (+)        | 3V3           | Use 3V3 (no 5V, módulos acionados em LOW ficam tocando sem parar)
+// GND (-)        | GND           | Terra comum
+// I/O (S / SIG)  | D23 (GPIO 23) | Saída digital/PWM livre, não interfere no boot do ESP32
+// ----------------------------------------------------------------------------
+#define BUZZER_PIN 23
+
+// 1 = Buzzer ATIVO (já tem oscilador interno, ex: KY-012) -> apita só com HIGH/LOW
+// 0 = Buzzer PASSIVO (sem oscilador, ex: KY-006) -> precisa de PWM (toca melodias com notas)
+#define BUZZER_ATIVO 1
+
+// Nível lógico que LIGA o buzzer:
+// HIGH = módulos comuns com transistor NPN (padrão)
+// LOW  = módulos com transistor PNP (S8550). Se o buzzer apitar SEM PARAR ao ligar, troque para LOW.
+#define BUZZER_NIVEL_LIGADO HIGH
+
 // ============================================================================
-// 3. INSTÂNCIAS DOS DISPOSITIVOS
+// 3. PARÂMETROS DE DESEMPENHO E SEGURANÇA
+// ============================================================================
+#define MAX_AGENDAMENTOS         8
+#define TAM_MAX_COMANDO          96      // Tamanho máximo de um comando recebido (bytes)
+#define TAM_FILA_COMANDOS        8       // Comandos BLE enfileirados sem perda
+#define PASSOS_POR_DOSE          276     // Passos do motor por compartimento (~45 graus, calibrado)
+#define VELOCIDADE_MOTOR_RPM     12
+
+const unsigned long COOLDOWN_RFID_MS        = 2500;  // Evita leituras repetidas do mesmo toque
+const unsigned long INTERVALO_POLL_RFID_MS  = 80;    // Consulta o leitor ~12x/s (antes: todo loop)
+const unsigned long INTERVALO_SAUDE_RFID_MS = 5000;  // Verifica/reconecta o RC522 a cada 5s
+const unsigned long INTERVALO_TELA_MS       = 1000;  // Atualização do OLED
+const unsigned long MAX_SEGUNDOS_AGENDA     = 1728000UL; // 20 dias (limite seguro do millis())
+
+// ============================================================================
+// 4. INSTÂNCIAS DOS DISPOSITIVOS
 // ============================================================================
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 Stepper myStepper(2048, IN1, IN3, IN2, IN4);
 MFRC522 rfid(RFID_SDA, RFID_RST);
 Preferences prefs;
 
+// Fila thread-safe entre a task do Bluetooth e o loop() principal
+QueueHandle_t filaComandos = nullptr;
+
+// Acumulador de linhas de texto (Serial USB, BT Clássico e BLE)
+struct BufferLinha {
+  char dados[TAM_MAX_COMANDO];
+  size_t len = 0;
+};
+
 #if USAR_BLUETOOTH_CLASSICO
   #include <BluetoothSerial.h>
   BluetoothSerial SerialBT;
+  BufferLinha bufferBT;
 #else
   #include <BLEDevice.h>
   #include <BLEServer.h>
@@ -77,13 +123,13 @@ Preferences prefs;
   #define SERVICE_UUID           "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
   #define CHARACTERISTIC_UUID_RX "6e400002-b5a3-f393-e0a9-e50e24dcca9e" // Celular -> Caixa
   #define CHARACTERISTIC_UUID_TX "6e400003-b5a3-f393-e0a9-e50e24dcca9e" // Caixa -> Celular
+  #define MTU_LOCAL_BLE          185
 
   BLEServer* pServer = nullptr;
   BLECharacteristic* pTxCharacteristic = nullptr;
-  bool bleConectado = false;
+  volatile bool bleConectado = false;
   bool bleConectadoAnterior = false;
-  String filaComandoBLE = "";
-  volatile bool comandoBLERecebido = false;
+  BufferLinha bufferBLE; // Usado apenas dentro da task do Bluetooth
 #endif
 
 #if ATIVAR_PULSEIRA
@@ -92,7 +138,7 @@ Preferences prefs;
 #endif
 
 // ============================================================================
-// 4. ESTRUTURA PARA A PULSEIRA (EXPANSÃO FUTURA)
+// 5. ESTRUTURA PARA A PULSEIRA (EXPANSÃO FUTURA)
 // ============================================================================
 uint8_t macPulseira[] = {0x84, 0xFC, 0xE6, 0x00, 0xD3, 0x38};
 
@@ -129,13 +175,12 @@ void notificarPulseira(int codigoComando) {
 }
 
 // ============================================================================
-// 5. ESTADO DA CAIXA: ESTOQUE, AGENDAMENTOS E COOLDOWNS
+// 6. ESTADO DA CAIXA: ESTOQUE, AGENDAMENTOS E PERIFÉRICOS
 // ============================================================================
 int capacidadeTotal = 7;
 int slotsOcupados = 0;
 bool emUso = false;
 
-#define MAX_AGENDAMENTOS 8
 struct Agendamento {
   unsigned long alvoMillis;
   unsigned long repeteMillis;
@@ -144,7 +189,8 @@ struct Agendamento {
 };
 Agendamento listaAgendamentos[MAX_AGENDAMENTOS];
 
-// Controle de mensagens do OLED
+// Display OLED
+bool oledOk = false;
 bool msgAtiva = false;
 unsigned long msgAte = 0;
 unsigned long ultimoRefresh = 0;
@@ -152,19 +198,37 @@ unsigned long ultimoRefresh = 0;
 // Leitor RFID
 bool rfidOperacional = false;
 unsigned long ultimoRfidMillis = 0;
-const unsigned long COOLDOWN_RFID_MS = 2500; // Evita múltiplas leituras no mesmo toque do cartão
+unsigned long ultimoPollRfid = 0;
+unsigned long ultimaSaudeRfid = 0;
 
 // Buffer Serial USB
-String bufferSerial = "";
+BufferLinha bufferSerial;
 
-// Protótipos das funções auxiliares
+// Protótipos
 void enviarStatusBT();
 void enviarRespostaBT(const String& msg);
-void updateDisplay(String linha1, String linha2);
-void showMessage(String l1, String l2, unsigned long ms = 2500);
+void updateDisplay(const String& linha1, const String& linha2);
+void showMessage(const String& l1, const String& l2, unsigned long ms = 2500);
 
 // ============================================================================
-// 6. PERSISTÊNCIA NA FLASH (NVS / PREFERENCES)
+// 7. UTILITÁRIOS DE ENTRADA DE TEXTO
+// ============================================================================
+// Acumula um caractere; retorna true quando uma linha completa está em b.dados
+bool acumularCaractere(BufferLinha& b, char c) {
+  if (c == '\n' || c == '\r') {
+    if (b.len == 0) return false;
+    b.dados[b.len] = '\0';
+    b.len = 0;
+    return true;
+  }
+  if (b.len < TAM_MAX_COMANDO - 1) {
+    b.dados[b.len++] = c;
+  }
+  return false;
+}
+
+// ============================================================================
+// 8. PERSISTÊNCIA NA FLASH (NVS / PREFERENCES)
 // ============================================================================
 void salvarEstoqueNaFlash() {
   prefs.begin("elos", false);
@@ -181,7 +245,7 @@ void carregarEstoqueDaFlash() {
 }
 
 // ============================================================================
-// 7. CONTROLE DO MOTOR E DISPLAY
+// 9. MOTOR, AGENDA E DISPLAY
 // ============================================================================
 void stopMotor() {
   digitalWrite(IN1, LOW);
@@ -208,6 +272,17 @@ int proximoAgendamento() {
   return idx;
 }
 
+// Reagenda sem acumular atraso (mantém a cadência exata) ou encerra dose única
+void reagendarOuDesativar(Agendamento& a) {
+  if (a.repeteMillis > 0) {
+    do {
+      a.alvoMillis += a.repeteMillis;
+    } while ((long)(a.alvoMillis - millis()) <= 0);
+  } else {
+    a.ativo = false;
+  }
+}
+
 void formatarTempo(long ms, char* buf, size_t tam) {
   if (ms < 0) ms = 0;
   long s = ms / 1000;
@@ -226,7 +301,8 @@ bool bluetoothEstaConectado() {
 #endif
 }
 
-void updateDisplay(String linha1, String linha2) {
+void updateDisplay(const String& linha1, const String& linha2) {
+  if (!oledOk) return; // Evita timeouts no I2C se o display estiver ausente
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
@@ -238,24 +314,21 @@ void updateDisplay(String linha1, String linha2) {
   display.display();
 }
 
-void showMessage(String l1, String l2, unsigned long ms) {
+void showMessage(const String& l1, const String& l2, unsigned long ms) {
   updateDisplay(l1, l2);
   msgAtiva = true;
   msgAte = millis() + ms;
 }
 
 void telaPrincipal() {
+  if (!oledOk) return;
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
   // Linha superior: Status Bluetooth + Status RFID
   display.setTextSize(1);
   display.setCursor(0, 0);
-  if (bluetoothEstaConectado()) {
-    display.print("BT:OK ");
-  } else {
-    display.print("BT:OFF ");
-  }
+  display.print(bluetoothEstaConectado() ? "BT:OK " : "BT:OFF ");
   display.print("| RFID:");
   display.print(rfidOperacional ? "OK" : "ERRO");
 
@@ -271,25 +344,125 @@ void telaPrincipal() {
   display.setTextSize(1);
   display.setCursor(0, 38);
   int p = proximoAgendamento();
+  char buf[12];
   if (p < 0) {
     display.print("Sem agendamento");
-    display.setTextSize(2);
-    display.setCursor(0, 48);
-    display.print("--:--:--");
+    strcpy(buf, "--:--:--");
   } else {
-    char buf[12];
-    formatarTempo(restanteMs(p), buf, sizeof(buf));
     display.print("Proxima dose em:");
-    display.setTextSize(2);
-    display.setCursor(0, 48);
-    display.print(buf);
+    formatarTempo(restanteMs(p), buf, sizeof(buf));
   }
+  display.setTextSize(2);
+  display.setCursor(0, 48);
+  display.print(buf);
   display.display();
 }
 
 // ============================================================================
-// 8. COMUNICAÇÃO BLUETOOTH COM O APLICATIVO
+// 9.1 BUZZER (APITA TODA VEZ QUE UM REMÉDIO É LIBERADO, DE QUALQUER FORMA)
+//     Execução NÃO-BLOQUEANTE: o loop continua rodando enquanto o buzzer toca
 // ============================================================================
+struct NotaBuzzer {
+  uint16_t freq; // Hz (0 = silêncio). No buzzer ATIVO qualquer valor > 0 apenas liga.
+  uint16_t ms;   // Duração da nota
+};
+
+// Sinal de "Remédio liberado": bip-bip-BIIP ... bip-bip-BIIP (~1,7 s)
+const NotaBuzzer MELODIA_DOSE[] = {
+  {2093, 150}, {0, 90}, {2093, 150}, {0, 90}, {2637, 280}, {0, 420},
+  {2093, 150}, {0, 90}, {2093, 150}, {0, 90}, {2637, 280}
+};
+const size_t TAM_MELODIA_DOSE = sizeof(MELODIA_DOSE) / sizeof(MELODIA_DOSE[0]);
+
+const NotaBuzzer* melodiaAtual = nullptr;
+size_t tamMelodiaAtual = 0;
+size_t idxNotaAtual = 0;
+unsigned long fimNotaMillis = 0;
+
+#if !BUZZER_ATIVO
+  #define CANAL_PWM_BUZZER 4
+#endif
+
+void buzzerSaida(uint16_t freq) {
+#if BUZZER_ATIVO
+  digitalWrite(BUZZER_PIN, freq > 0 ? BUZZER_NIVEL_LIGADO : !BUZZER_NIVEL_LIGADO);
+#else
+  #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  if (freq > 0) {
+    ledcAttach(BUZZER_PIN, freq, 8);
+    ledcWriteTone(BUZZER_PIN, freq);
+  } else {
+    ledcDetach(BUZZER_PIN);
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, !BUZZER_NIVEL_LIGADO);
+  }
+  #else
+  if (freq > 0) {
+    ledcAttachPin(BUZZER_PIN, CANAL_PWM_BUZZER);
+    ledcWriteTone(CANAL_PWM_BUZZER, freq);
+  } else {
+    ledcWriteTone(CANAL_PWM_BUZZER, 0);
+    ledcDetachPin(BUZZER_PIN);
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, !BUZZER_NIVEL_LIGADO); // Mantém o módulo desligado em repouso
+  }
+  #endif
+#endif
+}
+
+void iniciarBuzzer() {
+  pinMode(BUZZER_PIN, OUTPUT);
+#if !BUZZER_ATIVO && !(defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
+  ledcSetup(CANAL_PWM_BUZZER, 2000, 8);
+#endif
+  buzzerSaida(0);
+  Serial.printf("[BUZZER] Pronto no pino D%d (%s, liga em %s)\n", BUZZER_PIN,
+                BUZZER_ATIVO ? "ativo" : "passivo",
+                BUZZER_NIVEL_LIGADO == HIGH ? "HIGH" : "LOW");
+}
+
+void tocarMelodia(const NotaBuzzer* melodia, size_t tamanho) {
+  if (melodia == nullptr || tamanho == 0) return;
+  melodiaAtual = melodia;
+  tamMelodiaAtual = tamanho;
+  idxNotaAtual = 0;
+  buzzerSaida(melodia[0].freq);
+  fimNotaMillis = millis() + melodia[0].ms;
+}
+
+void tocarSinalDeDose() {
+  tocarMelodia(MELODIA_DOSE, TAM_MELODIA_DOSE);
+}
+
+// Avança as notas sem travar o loop (chamado continuamente no loop)
+void atualizarBuzzer() {
+  if (melodiaAtual == nullptr) return;
+  if ((long)(millis() - fimNotaMillis) < 0) return;
+
+  idxNotaAtual++;
+  if (idxNotaAtual >= tamMelodiaAtual) {
+    buzzerSaida(0);
+    melodiaAtual = nullptr;
+    return;
+  }
+  buzzerSaida(melodiaAtual[idxNotaAtual].freq);
+  fimNotaMillis = millis() + melodiaAtual[idxNotaAtual].ms;
+}
+
+// ============================================================================
+// 10. COMUNICAÇÃO BLUETOOTH COM O APLICATIVO
+// ============================================================================
+#if !USAR_BLUETOOTH_CLASSICO
+// Usa o MTU negociado com o celular para enviar pacotes maiores (menos notificações)
+size_t tamanhoPacoteBLE() {
+  if (pServer == nullptr) return 20;
+  uint16_t mtu = pServer->getPeerMTU(pServer->getConnId());
+  if (mtu <= 23) return 20;
+  size_t util = mtu - 3;
+  return util > 180 ? 180 : util;
+}
+#endif
+
 void enviarRespostaBT(const String& msg) {
   String linha = msg + "\n";
   Serial.print("[BT TX] " + linha);
@@ -302,12 +475,12 @@ void enviarRespostaBT(const String& msg) {
   if (bleConectado && pTxCharacteristic != nullptr) {
     const char* str = linha.c_str();
     size_t len = linha.length();
-    const size_t chunkSize = 20;
+    const size_t chunkSize = tamanhoPacoteBLE();
     for (size_t i = 0; i < len; i += chunkSize) {
       size_t tam = (len - i < chunkSize) ? (len - i) : chunkSize;
       pTxCharacteristic->setValue((uint8_t*)(str + i), tam);
       pTxCharacteristic->notify();
-      delay(8);
+      delay(6);
     }
   }
 #endif
@@ -315,20 +488,33 @@ void enviarRespostaBT(const String& msg) {
 
 void enviarStatusBT() {
   int p = proximoAgendamento();
-  String json = "{\"ocupados\":" + String(slotsOcupados) +
-                ",\"total\":" + String(capacidadeTotal) +
-                ",\"proximo\":" + String(p >= 0 ? restanteMs(p) / 1000 : -1) +
-                ",\"agendamentos\":[";
+  String json;
+  json.reserve(160 + MAX_AGENDAMENTOS * 90); // Evita realocações/fragmentação de heap
+  json += "{\"ocupados\":";
+  json += slotsOcupados;
+  json += ",\"total\":";
+  json += capacidadeTotal;
+  json += ",\"rfid\":";
+  json += rfidOperacional ? "true" : "false";
+  json += ",\"proximo\":";
+  json += (p >= 0 ? restanteMs(p) / 1000 : -1);
+  json += ",\"agendamentos\":[";
+
   bool primeiro = true;
   for (int i = 0; i < MAX_AGENDAMENTOS; i++) {
     if (!listaAgendamentos[i].ativo) continue;
     long r = restanteMs(i);
     if (r < 0) r = 0;
     if (!primeiro) json += ",";
-    json += "{\"id\":" + String(i) +
-            ",\"desc\":\"" + listaAgendamentos[i].descricao + "\"" +
-            ",\"restante\":" + String(r / 1000) +
-            ",\"repete\":" + String(listaAgendamentos[i].repeteMillis / 1000) + "}";
+    json += "{\"id\":";
+    json += i;
+    json += ",\"desc\":\"";
+    json += listaAgendamentos[i].descricao;
+    json += "\",\"restante\":";
+    json += r / 1000;
+    json += ",\"repete\":";
+    json += listaAgendamentos[i].repeteMillis / 1000;
+    json += "}";
     primeiro = false;
   }
   json += "]}";
@@ -336,7 +522,9 @@ void enviarStatusBT() {
 }
 
 // ============================================================================
-// 9. MECANISMO DE DISPENSAÇÃO MECÂNICA
+// 11. MECANISMO DE DISPENSAÇÃO MECÂNICA
+//     PONTO ÚNICO de liberação: App (DISPENSAR), Tag RFID e Agendamentos
+//     passam TODOS por aqui -> o buzzer apita em qualquer liberação.
 // ============================================================================
 bool acionarDispensador(const String& tituloOLED = "Liberando") {
   if (slotsOcupados > 0 && !emUso) {
@@ -345,8 +533,10 @@ bool acionarDispensador(const String& tituloOLED = "Liberando") {
     salvarEstoqueNaFlash();
 
     updateDisplay(tituloOLED, "Remedio...");
-    myStepper.step(276); // Gira 45 graus (1/8 de volta)
-    stopMotor();
+    myStepper.step(PASSOS_POR_DOSE);
+    stopMotor(); // Desenergiza as bobinas (evita aquecimento e consumo)
+
+    tocarSinalDeDose(); // Apita SEMPRE que um remédio é liberado (não bloqueia o loop)
 
     dadosPulseira.slotsRestantes = slotsOcupados;
     notificarPulseira(1);
@@ -364,55 +554,100 @@ bool acionarDispensador(const String& tituloOLED = "Liberando") {
 }
 
 // ============================================================================
-// 10. LEITOR RFID RC522 (REFATORADO E ROBUSTO)
+// 12. LEITOR RFID RC522 (COM AUTO-DIAGNÓSTICO E RECONEXÃO AUTOMÁTICA)
 // ============================================================================
+bool rc522Responde(byte* versaoOut = nullptr) {
+  byte v = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+  if (versaoOut) *versaoOut = v;
+  return v != 0x00 && v != 0xFF;
+}
+
+const char* descreverVersaoRC522(byte v) {
+  switch (v) {
+    case 0x91: return "MFRC522 v1.0";
+    case 0x92: return "MFRC522 v2.0";
+    case 0x88: return "Clone FM17522";
+    case 0x12: return "Clone compativel";
+    default:   return "Chip compativel";
+  }
+}
+
+bool inicializarLeitorRFID(bool verbose) {
+  rfid.PCD_Init(); // Reset por hardware via pino RST + configuração padrão
+  delay(10);
+
+  byte versao = 0;
+  if (rc522Responde(&versao)) {
+    rfid.PCD_SetAntennaGain(MFRC522::RxGain_max); // Ganho máximo = maior alcance
+    if (verbose) {
+      Serial.printf("[RFID] RC522 OPERACIONAL! %s (0x%02X)\n", descreverVersaoRC522(versao), versao);
+    }
+    return true;
+  }
+
+  if (verbose) {
+    Serial.printf("[RFID] ERRO: RC522 nao respondeu (0x%02X).\n", versao);
+    Serial.println("       -> Confira o FIO VERDE (MOSI) no D26 e a alimentacao em 3.3V.");
+    Serial.println("       -> Nova tentativa automatica a cada 5 segundos.");
+  }
+  return false;
+}
+
 void iniciarRFID() {
-  Serial.println("[RFID] Inicializando RC522...");
-  Serial.printf("       Pinos: SCK=D%d, MISO=D%d, MOSI=D%d, SDA=D%d, RST=D%d\n",
-                RFID_SCK, RFID_MISO, RFID_MOSI, RFID_SDA, RFID_RST);
-
-  // Inicia o barramento SPI nos pinos dedicados
+  Serial.printf("[RFID] Pinos: SDA=D%d SCK=D%d MOSI=D%d MISO=D%d RST=D%d\n",
+                RFID_SDA, RFID_SCK, RFID_MOSI, RFID_MISO, RFID_RST);
   SPI.begin(RFID_SCK, RFID_MISO, RFID_MOSI, RFID_SDA);
-  rfid.PCD_Init();
-  delay(35);
+  rfidOperacional = inicializarLeitorRFID(true);
+  ultimaSaudeRfid = millis();
+}
 
-  byte versao = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+// Monitora a saúde do leitor: detecta mau contato e reconecta sozinho
+void manterRFID() {
+  if (millis() - ultimaSaudeRfid < INTERVALO_SAUDE_RFID_MS) return;
+  ultimaSaudeRfid = millis();
 
-  if (versao != 0x00 && versao != 0xFF) {
+  if (rfidOperacional) {
+    if (!rc522Responde()) {
+      rfidOperacional = false;
+      Serial.println("[RFID] Leitor parou de responder (mau contato?). Tentando reconectar...");
+      enviarStatusBT();
+    }
+    return;
+  }
+
+  if (inicializarLeitorRFID(false)) {
     rfidOperacional = true;
-    rfid.PCD_SetAntennaGain(MFRC522::RxGain_max); // Força ganho máximo da antena
-    Serial.printf("[RFID] RC522 OPERACIONAL! Versao do chip: 0x%02X\n", versao);
-  } else {
-    rfidOperacional = false;
-    Serial.println("[RFID] ERRO: Leitor RC522 nao respondeu (0x00/0xFF).");
-    Serial.println("       -> Verifique se o FIO VERDE (MOSI) esta no D26!");
-    Serial.println("       -> Verifique a alimentacao no 3.3V.");
+    Serial.println("[RFID] Leitor RC522 reconectado com sucesso!");
+    showMessage("RFID", "Conectado!", 2000);
+    enviarStatusBT();
   }
 }
 
 void verificarLeituraRFID() {
   if (!rfidOperacional) return;
+  if (millis() - ultimoPollRfid < INTERVALO_POLL_RFID_MS) return;
+  ultimoPollRfid = millis();
   if (millis() - ultimoRfidMillis < COOLDOWN_RFID_MS) return;
 
-  // Verifica se há cartão presente e faz a leitura
   if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return;
 
   ultimoRfidMillis = millis();
 
-  // Converte o UID para string HEX
-  String uidStr = "";
-  for (byte i = 0; i < rfid.uid.size; i++) {
-    if (rfid.uid.uidByte[i] < 0x10) uidStr += "0";
-    uidStr += String(rfid.uid.uidByte[i], HEX);
+  // Converte o UID para HEX sem alocações repetidas de String
+  char uidHex[2 * 10 + 1];
+  size_t pos = 0;
+  for (byte i = 0; i < rfid.uid.size && i < 10; i++) {
+    pos += snprintf(uidHex + pos, sizeof(uidHex) - pos, "%02X", rfid.uid.uidByte[i]);
   }
-  uidStr.toUpperCase();
+  uidHex[pos] = '\0';
 
-  Serial.println("[RFID] Tag de Cuidador/Emergencia lida com sucesso! UID: " + uidStr);
+  Serial.printf("[RFID] Tag de Cuidador/Emergencia lida! UID: %s\n", uidHex);
 
-  // Finaliza a comunicação com a tag atual
+  // Coloca a tag em HALT: ela só dispara de novo se for afastada e reaproximada
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 
+  String uidStr(uidHex);
   if (slotsOcupados > 0 && !emUso) {
     acionarDispensador("Tag RFID:");
     enviarRespostaBT("{\"evento\":\"DISPENSADO_RFID\",\"origem\":\"RFID\",\"uid\":\"" + uidStr + "\",\"ok\":true}");
@@ -424,7 +659,7 @@ void verificarLeituraRFID() {
 }
 
 // ============================================================================
-// 11. PROCESSADOR DE COMANDOS (BLUETOOTH E SERIAL USB)
+// 13. PROCESSADOR DE COMANDOS (BLUETOOTH E SERIAL USB)
 // ============================================================================
 void processarComando(String cmd) {
   cmd.trim();
@@ -488,6 +723,18 @@ void processarComando(String cmd) {
     int p2 = cmd.indexOf(':', p1 + 1);
     int p3 = cmd.indexOf(':', p2 + 1);
     if (p1 > 0 && p2 > p1 && p3 > p2) {
+      long delaySegundos = cmd.substring(p1 + 1, p2).toInt();
+      long repSegundos = cmd.substring(p2 + 1, p3).toInt();
+      String descricao = cmd.substring(p3 + 1);
+
+      // Valida valores (evita negativos e estouro do contador millis())
+      if (delaySegundos <= 0 || repSegundos < 0 ||
+          (unsigned long)delaySegundos > MAX_SEGUNDOS_AGENDA ||
+          (unsigned long)repSegundos > MAX_SEGUNDOS_AGENDA) {
+        enviarRespostaBT("{\"evento\":\"INVALIDO\",\"ok\":false}");
+        return;
+      }
+
       int slotLivre = -1;
       for (int i = 0; i < MAX_AGENDAMENTOS; i++) {
         if (!listaAgendamentos[i].ativo) {
@@ -500,21 +747,12 @@ void processarComando(String cmd) {
         return;
       }
 
-      unsigned long delaySegundos = cmd.substring(p1 + 1, p2).toInt();
-      unsigned long repSegundos = cmd.substring(p2 + 1, p3).toInt();
-      String descricao = cmd.substring(p3 + 1);
-
-      if (delaySegundos == 0) {
-        enviarRespostaBT("{\"evento\":\"INVALIDO\",\"ok\":false}");
-        return;
-      }
-
       descricao.replace("\"", "'");
       descricao.replace("\\", "/");
       if (descricao.length() > 40) descricao = descricao.substring(0, 40);
 
-      listaAgendamentos[slotLivre].alvoMillis = millis() + (delaySegundos * 1000UL);
-      listaAgendamentos[slotLivre].repeteMillis = repSegundos * 1000UL;
+      listaAgendamentos[slotLivre].alvoMillis = millis() + ((unsigned long)delaySegundos * 1000UL);
+      listaAgendamentos[slotLivre].repeteMillis = (unsigned long)repSegundos * 1000UL;
       listaAgendamentos[slotLivre].descricao = descricao;
       listaAgendamentos[slotLivre].ativo = true;
 
@@ -529,9 +767,17 @@ void processarComando(String cmd) {
 }
 
 // ============================================================================
-// 12. CALLBACKS E INICIALIZAÇÃO BLE NORDIC UART
+// 14. CALLBACKS E INICIALIZAÇÃO BLE NORDIC UART
 // ============================================================================
 #if !USAR_BLUETOOTH_CLASSICO
+// Envia a linha montada para a fila (executado na task do Bluetooth)
+void enfileirarComandoBLE(const char* linha) {
+  if (filaComandos == nullptr) return;
+  if (xQueueSend(filaComandos, linha, 0) != pdTRUE) {
+    Serial.println("[BLE] Fila de comandos cheia, comando descartado.");
+  }
+}
+
 class CallbacksServidorBLE : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) override {
     bleConectado = true;
@@ -539,6 +785,7 @@ class CallbacksServidorBLE : public BLEServerCallbacks {
   }
   void onDisconnect(BLEServer* pServer) override {
     bleConectado = false;
+    bufferBLE.len = 0;
     Serial.println("[BLE] Aplicativo desconectado. Reiniciando anuncio...");
     pServer->startAdvertising();
   }
@@ -546,23 +793,21 @@ class CallbacksServidorBLE : public BLEServerCallbacks {
 
 class CallbacksRecepcaoBLE : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* pCharacteristic) override {
-    std::string rxValue = pCharacteristic->getValue();
-    if (rxValue.length() > 0) {
-      for (size_t i = 0; i < rxValue.length(); i++) {
-        char c = rxValue[i];
-        if (c == '\n' || c == '\r') {
-          if (filaComandoBLE.length() > 0) {
-            comandoBLERecebido = true;
-          }
-        } else {
-          filaComandoBLE += c;
-        }
+    auto rxValue = pCharacteristic->getValue();
+    for (size_t i = 0; i < rxValue.length(); i++) {
+      if (acumularCaractere(bufferBLE, rxValue[i])) {
+        enfileirarComandoBLE(bufferBLE.dados);
       }
-      if (!comandoBLERecebido && filaComandoBLE.length() > 0 &&
-          (filaComandoBLE.equalsIgnoreCase("STATUS") ||
-           filaComandoBLE.equalsIgnoreCase("DISPENSAR") ||
-           filaComandoBLE.equalsIgnoreCase("LIMPAR"))) {
-        comandoBLERecebido = true;
+    }
+
+    // Compatibilidade: comandos curtos enviados sem '\n' (ex: testes no nRF Connect)
+    if (bufferBLE.len > 0) {
+      bufferBLE.dados[bufferBLE.len] = '\0';
+      if (strcasecmp(bufferBLE.dados, "STATUS") == 0 ||
+          strcasecmp(bufferBLE.dados, "DISPENSAR") == 0 ||
+          strcasecmp(bufferBLE.dados, "LIMPAR") == 0) {
+        enfileirarComandoBLE(bufferBLE.dados);
+        bufferBLE.len = 0;
       }
     }
   }
@@ -575,6 +820,8 @@ void iniciarBluetooth() {
   Serial.println("[BT] Bluetooth Classico SPP iniciado: " NOME_BLUETOOTH);
 #else
   BLEDevice::init(NOME_BLUETOOTH);
+  BLEDevice::setMTU(MTU_LOCAL_BLE); // Permite pacotes maiores após negociação com o celular
+
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new CallbacksServidorBLE());
 
@@ -594,6 +841,7 @@ void iniciarBluetooth() {
 
   pService->start();
 
+  // Nome no pacote principal e UUID de 128 bits no Scan Response (limite de 31 bytes)
   BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
   BLEAdvertisementData advData;
   advData.setFlags(0x06);
@@ -612,61 +860,20 @@ void iniciarBluetooth() {
 }
 
 // ============================================================================
-// 13. SETUP E LOOP PRINCIPAL
+// 15. ROTINAS DO LOOP
 // ============================================================================
-void setup() {
-  Serial.begin(115200);
-  delay(800);
-  Serial.println("\n--- [E.L.O.S. INICIALIZANDO SISTEMA] ---");
-
-  for (int i = 0; i < MAX_AGENDAMENTOS; i++) {
-    listaAgendamentos[i].ativo = false;
-  }
-
-  carregarEstoqueDaFlash();
-  myStepper.setSpeed(12);
-  stopMotor();
-
-  // Inicializa Display OLED
-  Wire.begin(OLED_SDA, OLED_SCL);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("[ERRO] Display OLED nao encontrado no I2C (D14/D27).");
-  } else {
-    updateDisplay("E.L.O.S.", "Iniciando...");
-  }
-
-  // Inicializa Comunicação e Periféricos
-  iniciarBluetooth();
-  iniciarRFID();
-  iniciarComunicacaoPulseira();
-
-  showMessage("Sistema Pronto", NOME_BLUETOOTH, 2500);
-  Serial.println("[SISTEMA] Inicializacao completa. Aguardando comandos ou tags.");
-}
-
-void loop() {
-  // 1. Monitora aproximação de Cartão RFID de Emergência / Cuidador
-  verificarLeituraRFID();
-
-  // 2. Processa comandos vindos do Bluetooth
+void processarEntradasDeComandos() {
 #if USAR_BLUETOOTH_CLASSICO
   while (SerialBT.available()) {
-    char c = (char)SerialBT.read();
-    if (c == '\n' || c == '\r') {
-      if (bufferSerial.length() > 0) {
-        processarComando(bufferSerial);
-        bufferSerial = "";
-      }
-    } else {
-      bufferSerial += c;
+    if (acumularCaractere(bufferBT, (char)SerialBT.read())) {
+      processarComando(String(bufferBT.dados));
     }
   }
 #else
-  if (comandoBLERecebido) {
-    String cmd = filaComandoBLE;
-    filaComandoBLE = "";
-    comandoBLERecebido = false;
-    processarComando(cmd);
+  // Processa todos os comandos BLE pendentes na fila (sem perder comandos seguidos)
+  char cmd[TAM_MAX_COMANDO];
+  while (filaComandos != nullptr && xQueueReceive(filaComandos, cmd, 0) == pdTRUE) {
+    processarComando(String(cmd));
   }
 
   if (bleConectado && !bleConectadoAnterior) {
@@ -677,50 +884,94 @@ void loop() {
   }
 #endif
 
-  // 3. Processa comandos pelo Monitor Serial USB (para testes no PC)
+  // Comandos pelo Monitor Serial USB (testes no PC)
   while (Serial.available()) {
-    char c = (char)Serial.read();
-    if (c == '\n' || c == '\r') {
-      if (bufferSerial.length() > 0) {
-        processarComando(bufferSerial);
-        bufferSerial = "";
-      }
-    } else {
-      bufferSerial += c;
+    if (acumularCaractere(bufferSerial, (char)Serial.read())) {
+      processarComando(String(bufferSerial.dados));
     }
   }
+}
 
-  // 4. Disparo automático dos agendamentos programados
+void processarAgendamentos() {
   for (int i = 0; i < MAX_AGENDAMENTOS; i++) {
-    if (listaAgendamentos[i].ativo && restanteMs(i) <= 0) {
-      String descDisparo = listaAgendamentos[i].descricao;
-      if (slotsOcupados > 0) {
-        acionarDispensador("Hora da Dose");
-        if (listaAgendamentos[i].repeteMillis > 0) {
-          listaAgendamentos[i].alvoMillis = millis() + listaAgendamentos[i].repeteMillis;
-        } else {
-          listaAgendamentos[i].ativo = false;
-        }
-        enviarRespostaBT("{\"evento\":\"DISPENSADO\",\"origem\":\"AGENDAMENTO\",\"desc\":\"" + descDisparo + "\",\"ok\":true}");
-        enviarStatusBT();
-      } else {
-        dadosPulseira.slotsRestantes = 0;
-        notificarPulseira(2);
-        showMessage("ALERTA!", "Sem Remedio", 4000);
-        listaAgendamentos[i].ativo = false;
-        enviarRespostaBT("{\"evento\":\"VAZIO\",\"origem\":\"AGENDAMENTO\",\"desc\":\"" + descDisparo + "\",\"ok\":false}");
-        enviarStatusBT();
-      }
-    }
-  }
+    Agendamento& a = listaAgendamentos[i];
+    if (!a.ativo || restanteMs(i) > 0) continue;
 
-  // 5. Atualização periódica da tela OLED (1x por segundo)
+    String descDisparo = a.descricao;
+    if (slotsOcupados > 0) {
+      acionarDispensador("Hora da Dose");
+      reagendarOuDesativar(a);
+      enviarRespostaBT("{\"evento\":\"DISPENSADO\",\"origem\":\"AGENDAMENTO\",\"desc\":\"" + descDisparo + "\",\"ok\":true}");
+    } else {
+      dadosPulseira.slotsRestantes = 0;
+      notificarPulseira(2);
+      showMessage("ALERTA!", "Sem Remedio", 4000);
+      // Horários recorrentes continuam ativos para a próxima dose após reabastecer
+      reagendarOuDesativar(a);
+      enviarRespostaBT("{\"evento\":\"VAZIO\",\"origem\":\"AGENDAMENTO\",\"desc\":\"" + descDisparo + "\",\"ok\":false}");
+    }
+    enviarStatusBT();
+  }
+}
+
+void atualizarTela() {
   if (msgAtiva && (long)(millis() - msgAte) >= 0) {
     msgAtiva = false;
   }
-
-  if (!msgAtiva && millis() - ultimoRefresh >= 1000) {
+  if (!msgAtiva && millis() - ultimoRefresh >= INTERVALO_TELA_MS) {
     ultimoRefresh = millis();
     telaPrincipal();
   }
+}
+
+// ============================================================================
+// 16. SETUP E LOOP PRINCIPAL
+// ============================================================================
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.println("\n--- [E.L.O.S. INICIALIZANDO SISTEMA] ---");
+
+  for (int i = 0; i < MAX_AGENDAMENTOS; i++) {
+    listaAgendamentos[i].ativo = false;
+  }
+
+  filaComandos = xQueueCreate(TAM_FILA_COMANDOS, TAM_MAX_COMANDO);
+
+  iniciarBuzzer();
+  carregarEstoqueDaFlash();
+
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  myStepper.setSpeed(VELOCIDADE_MOTOR_RPM);
+  stopMotor();
+
+  // Display OLED
+  Wire.begin(OLED_SDA, OLED_SCL);
+  oledOk = display.begin(SSD1306_SWITCHCAPVCC, OLED_ENDERECO);
+  if (oledOk) {
+    updateDisplay("E.L.O.S.", "Iniciando...");
+  } else {
+    Serial.println("[ERRO] Display OLED nao encontrado no I2C (D14/D27).");
+  }
+
+  // Comunicação e periféricos
+  iniciarBluetooth();
+  iniciarRFID();
+  iniciarComunicacaoPulseira();
+
+  showMessage("Sistema Pronto", NOME_BLUETOOTH, 2500);
+  Serial.printf("[SISTEMA] Pronto. Estoque: %d/%d | RFID: %s\n",
+                slotsOcupados, capacidadeTotal, rfidOperacional ? "OK" : "ERRO");
+}
+
+void loop() {
+  verificarLeituraRFID();       // 1. Tag de Emergência / Cuidador
+  manterRFID();                 // 2. Auto-diagnóstico e reconexão do RC522
+  processarEntradasDeComandos(); // 3. Comandos do App (BLE) e Serial USB
+  processarAgendamentos();      // 4. Disparo automático das doses
+  atualizarBuzzer();            // 5. Sinal sonoro de liberação (não-bloqueante)
+  atualizarTela();              // 6. Visor OLED
 }
