@@ -71,7 +71,7 @@
 
 // 1 = Buzzer ATIVO (já tem oscilador interno, ex: KY-012) -> apita só com HIGH/LOW
 // 0 = Buzzer PASSIVO (sem oscilador, ex: KY-006) -> precisa de PWM (toca melodias com notas)
-#define BUZZER_ATIVO 1
+#define BUZZER_ATIVO 0
 
 // Nível lógico que LIGA o buzzer:
 // HIGH = módulos comuns com transistor NPN (padrão)
@@ -359,66 +359,58 @@ void telaPrincipal() {
 }
 
 // ============================================================================
-// 9.1 BUZZER (APITA TODA VEZ QUE UM REMÉDIO É LIBERADO, DE QUALQUER FORMA)
+// 9.1 BUZZER DE ALTO VOLUME (UNIVERSAL: PASSIVO PWM OU ATIVO)
 //     Execução NÃO-BLOQUEANTE: o loop continua rodando enquanto o buzzer toca
 // ============================================================================
+#define CANAL_PWM_BUZZER 4
+
 struct NotaBuzzer {
-  uint16_t freq; // Hz (0 = silêncio). No buzzer ATIVO qualquer valor > 0 apenas liga.
-  uint16_t ms;   // Duração da nota
+  uint16_t freq; // Hz (2700Hz = pico de volume da maioria dos buzzers piezo)
+  uint16_t ms;   // Duração da nota em milissegundos
 };
 
-// Sinal de "Remédio liberado": bip-bip-BIIP ... bip-bip-BIIP (~1,7 s)
+// Melodia estridente e bem audível de dose: BIP! (120ms) - pausa - BIP! (120ms) - pausa - BIIIP! (300ms)
 const NotaBuzzer MELODIA_DOSE[] = {
-  {2093, 150}, {0, 90}, {2093, 150}, {0, 90}, {2637, 280}, {0, 420},
-  {2093, 150}, {0, 90}, {2093, 150}, {0, 90}, {2637, 280}
+  {2700, 120}, {0, 60},
+  {2700, 120}, {0, 60},
+  {3100, 320}, {0, 200},
+  {2700, 120}, {0, 60},
+  {3100, 320}
 };
 const size_t TAM_MELODIA_DOSE = sizeof(MELODIA_DOSE) / sizeof(MELODIA_DOSE[0]);
+
+// Bip curto de teste na inicialização da caixa (confirmação sonora)
+const NotaBuzzer BEEP_INICIAL[] = {
+  {2700, 100}, {0, 50}, {3100, 120}
+};
+const size_t TAM_BEEP_INICIAL = sizeof(BEEP_INICIAL) / sizeof(BEEP_INICIAL[0]);
 
 const NotaBuzzer* melodiaAtual = nullptr;
 size_t tamMelodiaAtual = 0;
 size_t idxNotaAtual = 0;
 unsigned long fimNotaMillis = 0;
 
-#if !BUZZER_ATIVO
-  #define CANAL_PWM_BUZZER 4
-#endif
-
 void buzzerSaida(uint16_t freq) {
-#if BUZZER_ATIVO
-  digitalWrite(BUZZER_PIN, freq > 0 ? BUZZER_NIVEL_LIGADO : !BUZZER_NIVEL_LIGADO);
-#else
-  #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
   if (freq > 0) {
-    ledcAttach(BUZZER_PIN, freq, 8);
-    ledcWriteTone(BUZZER_PIN, freq);
-  } else {
-    ledcDetach(BUZZER_PIN);
-    pinMode(BUZZER_PIN, OUTPUT);
-    digitalWrite(BUZZER_PIN, !BUZZER_NIVEL_LIGADO);
-  }
-  #else
-  if (freq > 0) {
-    ledcAttachPin(BUZZER_PIN, CANAL_PWM_BUZZER);
+    // Configura a frequência da nota
     ledcWriteTone(CANAL_PWM_BUZZER, freq);
+    // 50% de Duty Cycle (128 de 255) gera onda quadrada perfeita -> VOLUME MÁXIMO!
+    ledcWrite(CANAL_PWM_BUZZER, 128);
   } else {
+    // Silêncio completo (Duty Cycle 0)
     ledcWriteTone(CANAL_PWM_BUZZER, 0);
-    ledcDetachPin(BUZZER_PIN);
-    pinMode(BUZZER_PIN, OUTPUT);
-    digitalWrite(BUZZER_PIN, !BUZZER_NIVEL_LIGADO); // Mantém o módulo desligado em repouso
+    ledcWrite(CANAL_PWM_BUZZER, 0);
   }
-  #endif
-#endif
 }
 
 void iniciarBuzzer() {
-  pinMode(BUZZER_PIN, OUTPUT);
-#if !BUZZER_ATIVO && !(defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
-  ledcSetup(CANAL_PWM_BUZZER, 2000, 8);
-#endif
-  buzzerSaida(0);
-  Serial.printf("[BUZZER] Pronto no pino D%d (%s, liga em %s)\n", BUZZER_PIN,
-                BUZZER_ATIVO ? "ativo" : "passivo",
-                BUZZER_NIVEL_LIGADO == HIGH ? "HIGH" : "LOW");
+  // Configura o canal PWM com resolução de 8 bits e frequência base de 2700Hz
+  ledcSetup(CANAL_PWM_BUZZER, 2700, 8);
+  ledcAttachPin(BUZZER_PIN, CANAL_PWM_BUZZER);
+  buzzerSaida(0); // Inicia em silêncio
+
+  Serial.printf("[BUZZER] Driver PWM de alto volume pronto no pino D%d (Canal %d)\n",
+                BUZZER_PIN, CANAL_PWM_BUZZER);
 }
 
 void tocarMelodia(const NotaBuzzer* melodia, size_t tamanho) {
@@ -434,7 +426,7 @@ void tocarSinalDeDose() {
   tocarMelodia(MELODIA_DOSE, TAM_MELODIA_DOSE);
 }
 
-// Avança as notas sem travar o loop (chamado continuamente no loop)
+// Avança as notas de forma não-bloqueante no loop()
 void atualizarBuzzer() {
   if (melodiaAtual == nullptr) return;
   if ((long)(millis() - fimNotaMillis) < 0) return;
@@ -939,6 +931,7 @@ void setup() {
   filaComandos = xQueueCreate(TAM_FILA_COMANDOS, TAM_MAX_COMANDO);
 
   iniciarBuzzer();
+  tocarMelodia(BEEP_INICIAL, TAM_BEEP_INICIAL); // Confirmação sonora na inicialização
   carregarEstoqueDaFlash();
 
   pinMode(IN1, OUTPUT);
