@@ -256,3 +256,4 @@ Projeto_ELOS/
 * **Instituição:** Instituto Federal do Espírito Santo — **IFES**  
 * **Núcleo de Suporte:** **NAPNE** (Núcleo de Atendimento às Pessoas com Necessidades Específicas)  
 * **Autor:** **Renan Bernardo Gonçalves** — *Desenvolvimento de hardware, firmware embarcado, aplicativo móvel e integração mecânica/eletrônica.*
+* **Orientador:** Carlos Alexandre Siqueira da Silva — **IFES**  
